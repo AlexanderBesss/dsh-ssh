@@ -3,7 +3,7 @@
  *
  * It runs ONCE PER SSH INVOCATION, not as a resident process. Each invocation
  * carries one JSON request on stdin, closed immediately after (EOF is what makes
- * Windows OpenSSH deliver reliably — see the transport's header), and prints one
+ * Windows OpenSSH deliver reliably â€” see the transport's header), and prints one
  * JSON response before exiting. The script itself is staged on the remote host
  * once per version: it rides stdin as base64 under a short bootstrap, because an
  * `-EncodedCommand` blob for it would exceed the remote command-line cap.
@@ -247,16 +247,3 @@ export const AGENT_SCRIPT = [
 	'  }',
 	'}',
 ].join('\n')
-
-/**
- * Encode the agent script for PowerShell's `-EncodedCommand`.
- *
- * PowerShell expects base64 of the UTF-16LE script bytes; anything else is
- * silently mis-decoded, so the encoding is pinned here rather than left to a
- * caller.
- *
- * @returns the base64 payload to pass after `-EncodedCommand`.
- */
-export function encodeAgentCommand() {
-	return Buffer.from(AGENT_SCRIPT, 'utf16le').toString('base64')
-}

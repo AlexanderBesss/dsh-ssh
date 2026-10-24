@@ -24,9 +24,9 @@
  * The browser half also carries the plugin's configuration page: the Plugins
  * surface gives every installed bundle's row a `plugins.row.config` hole, and
  * a row that fills it grows a "Configure" control opening the row's page.
- * This one renders host / remoteRoot / remoteLabel over the settings form
- * `configForms.get('ssh')` — the same revision-fenced write path the app's
- * own plugin pages use, landing in the profile settings document.
+ * This one renders host / remoteRoot / remoteLabel over the settings form the
+ * Plugins page hands down — the same revision-fenced write path the app's own
+ * plugin pages use, landing in the profile settings document.
  *
  * Written with createElement (no JSX) to keep the bundle toolchain identical
  * to the host half: tsc never needs to understand JSX.
@@ -52,13 +52,6 @@ interface SettingsOp {
 	value?: unknown
 }
 
-/** The revision-fenced form the settings domain keeps for one Host entry. */
-interface ConfigForm {
-	getSnapshot: () => ConfigFormSnapshot
-	subscribe: (listener: () => void) => () => void
-	mutate: (ops: SettingsOp[], expectedRevision?: number) => Promise<boolean>
-}
-
 interface ConfigFormSnapshot {
 	status: 'loading' | 'ready' | 'unavailable'
 	value?: Record<string, unknown>
@@ -72,12 +65,6 @@ interface ClientScope {
 	slots: {
 		inject: (key: string, callback: () => (() => void) | void) => () => void
 		register: <Props>(registration: SlotRegistration, render: (props: Props) => unknown) => () => void
-	}
-	configForms: {
-		/** The shared form values and write queue for one Host plugin entry. */
-		get: (entryId: string) => ConfigForm
-		/** Keep a registration alive while the Host serves any of some namespaces. */
-		whileServed: (namespaces: string[], register: (served: Set<string>) => (() => void) | void) => () => void
 	}
 	uiWorkspace: {
 		/** The Host-routed picker face; in the desktop shell the native global wins over it. */
@@ -226,6 +213,20 @@ const itemStyle: Record<string, string> = {
 	cursor: 'pointer',
 }
 
+const bigButtonStyle: Record<string, string> = {
+	display: 'flex',
+	flexDirection: 'column',
+	gap: '6px',
+	padding: '14px 16px',
+	borderRadius: '8px',
+	border: '1px solid color-mix(in srgb, CanvasText 25%, transparent)',
+	background: 'transparent',
+	color: 'inherit',
+	font: 'inherit',
+	cursor: 'pointer',
+	textAlign: 'left',
+}
+
 /* ------------------------------------------------------------------ *
  * The flow occupant: a remote browser dialog, shown while `open` holds.
  * ------------------------------------------------------------------ */
@@ -363,19 +364,6 @@ function RemoteDirectoryFlow(props: FlowProps) {
 	const atDrives = browse !== undefined && browse.path === null
 	const commitDisabled = browse === undefined || browse.path === null || busyHere !== '' || busy
 	const remoteName = info === undefined ? 'remote PC' : info.machine ?? info.host
-	const bigButton: Record<string, string> = {
-		display: 'flex',
-		flexDirection: 'column',
-		gap: '6px',
-		padding: '14px 16px',
-		borderRadius: '8px',
-		border: '1px solid color-mix(in srgb, CanvasText 25%, transparent)',
-		background: 'transparent',
-		color: 'inherit',
-		font: 'inherit',
-		cursor: 'pointer',
-		textAlign: 'left',
-	}
 
 	if (!show) return null
 
@@ -413,7 +401,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 						{ style: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '6px 0' } },
 						createElement(
 							'button',
-							{ style: bigButton, disabled: localBusy, onClick: () => void chooseLocal() },
+							{ style: bigButtonStyle, disabled: localBusy, onClick: () => void chooseLocal() },
 							createElement('span', { style: { fontWeight: '600' } }, '🗂 This computer'),
 							createElement(
 								'span',
@@ -423,7 +411,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 						),
 						createElement(
 							'button',
-							{ style: bigButton, onClick: () => setView('remote') },
+							{ style: bigButtonStyle, onClick: () => setView('remote') },
 							createElement('span', { style: { fontWeight: '600' } }, `⇄ ${remoteName} — remote PC`),
 							createElement(
 								'span',
@@ -568,6 +556,27 @@ interface RowPageProps {
 	form?: { state: ConfigFormSnapshot; mutate: (ops: SettingsOp[], revision?: number) => Promise<boolean> }
 }
 
+const settingsInputStyle = {
+	width: '100%',
+	boxSizing: 'border-box' as const,
+	background: 'rgba(255,255,255,0.06)',
+	color: 'inherit',
+	border: '1px solid rgba(255,255,255,0.18)',
+	borderRadius: 6,
+	padding: '7px 9px',
+	font: 'inherit',
+}
+
+const settingsButtonStyle = (primary: boolean) => ({
+	background: primary ? 'rgba(255,255,255,0.9)' : 'transparent',
+	color: primary ? '#111' : 'inherit',
+	border: primary ? '1px solid transparent' : '1px solid rgba(255,255,255,0.22)',
+	borderRadius: 6,
+	padding: '7px 14px',
+	font: 'inherit',
+	cursor: 'pointer' as const,
+})
+
 function SshSettingsForm(props: RowPageProps) {
 	const page = props.form
 	const [draft, setDraft] = useState<Record<string, string>>({})
@@ -634,26 +643,6 @@ function SshSettingsForm(props: RowPageProps) {
 	if (page.state.status === 'loading') return createElement('p', { style: { fontSize: '12.5px', opacity: 0.7 } }, 'Loading settings…')
 	if (page.state.status === 'unavailable') return createElement('p', { style: { fontSize: '12.5px', opacity: 0.7 } }, 'This profile is not writable, so the settings are read here only.')
 
-	const inputStyle = {
-		width: '100%',
-		boxSizing: 'border-box' as const,
-		background: 'rgba(255,255,255,0.06)',
-		color: 'inherit',
-		border: '1px solid rgba(255,255,255,0.18)',
-		borderRadius: 6,
-		padding: '7px 9px',
-		font: 'inherit',
-	}
-	const buttonStyle = (primary: boolean) => ({
-		background: primary ? 'rgba(255,255,255,0.9)' : 'transparent',
-		color: primary ? '#111' : 'inherit',
-		border: primary ? '1px solid transparent' : '1px solid rgba(255,255,255,0.22)',
-		borderRadius: 6,
-		padding: '7px 14px',
-		font: 'inherit',
-		cursor: 'pointer' as const,
-	})
-
 	return createElement(
 		'div',
 		{ style: { display: 'grid', gap: 12, maxWidth: 520 } },
@@ -673,7 +662,7 @@ function SshSettingsForm(props: RowPageProps) {
 					createElement('span', { style: { opacity: 0.6 } }, ` — ${field.hint}`),
 				),
 				createElement('input', {
-					style: inputStyle,
+					style: settingsInputStyle,
 					value: draft[field.key] !== undefined ? draft[field.key] : current(field.key),
 					disabled: !page.state.writable || busy,
 					onChange: (event: any) => {
@@ -692,7 +681,7 @@ function SshSettingsForm(props: RowPageProps) {
 			createElement(
 				'button',
 				{
-					style: buttonStyle(true),
+					style: settingsButtonStyle(true),
 					disabled: !page.state.writable || busy || dirty.length === 0 || Object.keys(draftProblems).length > 0,
 					onClick: () => void save(),
 				},
@@ -701,7 +690,7 @@ function SshSettingsForm(props: RowPageProps) {
 			createElement(
 				'button',
 				{
-					style: buttonStyle(false),
+					style: settingsButtonStyle(false),
 					disabled: !page.state.writable || busy,
 					onClick: () => void restore(),
 				},

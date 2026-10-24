@@ -68,21 +68,12 @@ declare const fsVersionBrand: unique symbol
 export type FsTargetKey = string & { readonly [fsTargetKeyBrand]: 'FsTargetKey' }
 export type FsVersion = string & { readonly [fsVersionBrand]: 'FsVersion' }
 
-/**
- * Brand a string as an `FsTargetKey`. Identity function, matching the upstream
- * helper: a backend manufactures keys, a consumer only ever receives one.
- * @param key - the backend's raw key string.
- * @returns the same string.
- */
+/** Brand a string as an `FsTargetKey`. Identity function, matching the upstream helper. */
 export function FsTargetKey(key: string): FsTargetKey {
 	return key as FsTargetKey
 }
 
-/**
- * Brand a string as an `FsVersion`. Identity function, matching upstream.
- * @param version - the backend's raw version string.
- * @returns the same string.
- */
+/** Brand a string as an `FsVersion`. Identity function, matching upstream. */
 export function FsVersion(version: string): FsVersion {
 	return version as FsVersion
 }
@@ -179,17 +170,10 @@ export interface FsResolveOptions {
 	signal?: AbortSignal
 }
 
-/**
- * Typed filesystem failure carrying a stable `FS_*` code.
- */
+/** Typed filesystem failure carrying a stable `FS_*` code. */
 export class FsError extends Error {
 	code: FsErrorCode
 
-	/**
-	 * @param message - human-readable failure, naming the path and the verb.
-	 * @param code - one of the `FS_*` codes the fs vocabulary defines.
-	 * @param options - standard Error options, including `cause`.
-	 */
 	constructor(message: string, code: FsErrorCode, options?: ErrorOptions) {
 		super(message, options)
 		this.name = 'FsError'
@@ -219,10 +203,6 @@ export class FileSystem extends Service {
 	/**
 	 * Observe one target for changes. The base has no watching primitive, so it
 	 * rejects — which is also the honest answer for a remote backend.
-	 * @param target - resolved target to observe.
-	 * @param changed - invalidation callback.
-	 * @param signal - cancels watcher initialization.
-	 * @returns never resolves.
 	 */
 	watch(target: FsTarget, changed: () => void, signal?: AbortSignal): Promise<FsWatcher> {
 		signal?.throwIfAborted?.()
@@ -232,7 +212,6 @@ export class FileSystem extends Service {
 	/**
 	 * The sandbox mode this backend enforces by default. `undefined` means it
 	 * does not confine at all, which is what the bare local backend reports too.
-	 * @returns undefined.
 	 */
 	get sandboxMode(): undefined {
 		return undefined
@@ -241,8 +220,6 @@ export class FileSystem extends Service {
 	/**
 	 * Map a harness-host path into this filesystem's execution world. A remote
 	 * backend cannot read host files, so it exposes no mapping.
-	 * @param hostPath - absolute path on the harness host.
-	 * @returns undefined.
 	 */
 	processPathFromHostPath(hostPath: string): string | undefined {
 		return undefined
@@ -256,23 +233,13 @@ export class FileSystem extends Service {
  * `spawn`, and `spawnTerminal`.
  */
 export class SubprocessRuntime extends Service {
-	/**
-	 * @param ctx - the cordis context to register into.
-	 * @param slot - the service name to occupy; see {@link FileSystem}'s `slot`.
-	 */
 	constructor(ctx: Context, slot = 'subprocess') {
 		super(ctx, slot)
 	}
 }
 
-/**
- * Executable lookup completed without finding an executable file.
- */
+/** Executable lookup completed without finding an executable file. */
 export class SubprocessExecutableNotFoundError extends Error {
-	/**
-	 * @param message - provider-specific lookup diagnostic.
-	 * @param options - standard Error options, including `cause`.
-	 */
 	constructor(message: string, options?: ErrorOptions) {
 		super(message, options)
 		this.name = 'SubprocessExecutableNotFoundError'
