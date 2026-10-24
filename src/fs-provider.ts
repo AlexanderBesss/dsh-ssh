@@ -114,9 +114,6 @@ export class SshFileSystem extends FileSystem {
 	_locks = new Map<string, Promise<unknown>>()
 
 	/**
-	 * @param ctx - the cordis context.
-	 * @param config - `{ cwd }`, the remote workspace root.
-	 * @param transport - the {@link SshTransport} carrying agent calls.
 	 * @param slot - the service name to occupy: `'fs'` to replace the app's
 	 * filesystem outright, or a private name to stay unregistered from the
 	 * consumer's point of view (route mode, where a router answers `fs`).

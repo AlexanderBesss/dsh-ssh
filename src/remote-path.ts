@@ -16,8 +16,6 @@ const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|\\[\\/][^\\/])/
  * Whether a path is absolute in the remote (Windows) execution world.
  * Drive-relative forms (`C:work`) are not absolute and normalize rejects them
  * through this guard, matching the workspace registry's own stance on that form.
- * @param path - the path to classify.
- * @returns true for drive-rooted and UNC paths.
  */
 export function isAbsolute(path: string): boolean {
 	return ABSOLUTE.test(path)
@@ -25,10 +23,7 @@ export function isAbsolute(path: string): boolean {
 
 /**
  * Fold separators and collapse `.` / `..` segments without touching case.
- *
- * @param path - an absolute remote path.
- * @returns the normalized path, without a trailing separator.
- * @throws when the path is not absolute.
+ * Throws when the path is not absolute.
  */
 export function normalize(path: string): string {
 	if (!isAbsolute(path)) throw new Error(`dsh-ssh: not an absolute remote path: ${path}`)
@@ -57,12 +52,7 @@ export function normalize(path: string): string {
 	return joined.length === 2 && joined[1] === ':' ? `${joined}\\` : joined
 }
 
-/**
- * Resolve a possibly relative path against the remote workspace root.
- * @param cwd - absolute remote directory the call resolves from.
- * @param path - absolute, or relative to `cwd`.
- * @returns the normalized absolute remote path.
- */
+/** Resolve a possibly relative path against the remote workspace root. */
 export function resolvePath(cwd: string, path: unknown): string {
 	const value = String(path ?? '')
 	if (value.trim().length === 0) return normalize(cwd)
@@ -75,31 +65,19 @@ export function resolvePath(cwd: string, path: unknown): string {
  * The stable identity key for a remote path: case-folded, because NTFS lookups
  * are case-insensitive and the same file reached as `D:\Src\a.ts` or
  * `D:\src\A.TS` must share one stale-version guard.
- * @param path - an absolute remote path.
- * @returns the case-folded normalized path.
  */
 export function targetKey(path: string): string {
 	return normalize(path).toLowerCase()
 }
 
-/**
- * Whether `child` is `parent` itself or lives beneath it.
- * @param parent - candidate containing directory (already normalized).
- * @param child - candidate path (already normalized).
- * @returns true when containment holds, comparing case-insensitively.
- */
+/** Whether `child` is `parent` itself or lives beneath it, case-insensitively. */
 export function contains(parent: string, child: string): boolean {
 	const p = normalize(parent).toLowerCase().replace(/\\+$/, '')
 	const c = normalize(child).toLowerCase().replace(/\\+$/, '')
 	return c === p || c.startsWith(`${p}\\`)
 }
 
-/**
- * Join a directory with one child name.
- * @param dir - absolute remote directory.
- * @param name - child entry name.
- * @returns the normalized child path.
- */
+/** Join a directory with one child name; the result is normalized. */
 export function joinDir(dir: string, name: string): string {
 	return normalize(`${normalize(dir).replace(/\\+$/, '')}\\${name}`)
 }

@@ -132,8 +132,6 @@ export interface SshConfig {
  *
  * The search tools resolve it themselves at call time; this plugin only needs
  * it to pre-ship a matching copy to the remote host.
- *
- * @returns the local rg.exe path, or undefined when none is found.
  */
 function findPackagedRipgrep(): string | undefined {
 	// `resourcesPath` exists only when running inside the packaged Electron app;
@@ -158,13 +156,6 @@ function findPackagedRipgrep(): string | undefined {
  * worth having for a remote backend and is not worth failing the plugin over,
  * so this is attempted rather than required, and the file and shell tools work
  * either way.
- *
- * @param ctx - the cordis context.
- * @param config - resolved plugin configuration.
- * @param transport - the SSH transport to report on.
- * @param filesystem - the remote filesystem to probe for the root.
- * @returns resolves once registration has happened, or immediately when the
- *   helper is unavailable.
  */
 async function registerStatusTool(ctx: Context, config: SshConfig, transport: SshTransport, filesystem: SshFileSystem): Promise<void> {
 	let defineTool: any

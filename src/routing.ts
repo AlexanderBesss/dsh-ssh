@@ -59,11 +59,6 @@ export type RoutingSide = 'remote' | 'local'
  * The roots are read through a getter because the picker adds entries while
  * the app runs — a workspace opened on the remote PC joins the set the moment
  * it is prepared, and its sessions route from the first call.
- *
- * @param remoteRoots - live list of remote roots (configured root first).
- * @param path - the path being opened, absolute or relative.
- * @param cwd - the directory it resolves from, when the caller supplied one.
- * @returns `'remote'` or `'local'`.
  */
 export function sideFor(remoteRoots: () => readonly string[], path: unknown, cwd?: unknown): RoutingSide {
 	const value = String(path ?? '')
@@ -81,12 +76,7 @@ export function sideFor(remoteRoots: () => readonly string[], path: unknown, cwd
 	}
 }
 
-/**
- * The side that owns a resolved target, by the path the provider displayed it.
- * @param remoteRoots - live list of remote roots.
- * @param target - an `FsTarget`-shaped value, from either provider.
- * @returns `'remote'` or `'local'`.
- */
+/** The side that owns a resolved target, by the path the provider displayed it. */
 export function sideForTarget(remoteRoots: () => readonly string[], target: unknown): RoutingSide {
 	const display = (target as { displayPath?: unknown } | null | undefined)?.displayPath
 	if (typeof display !== 'string' || display.trim().length === 0) return 'local'
@@ -116,7 +106,6 @@ export type RoutingFallback = (name: string, args: any[]) => RoutingSide
  * method it calls `'remote'` is rejected loudly instead of running local,
  * because an unlisted target-taking method would otherwise read the empty
  * local mirror of a remote file and return it as if it were the file.
- * @returns the router.
  */
 function createRouter(local: object, remote: object, overrides: RoutingOverrides, fallback?: RoutingFallback): any {
 	/** routed implementations, bound to their owner. */
@@ -193,9 +182,6 @@ const FS_TARGET_METHODS = [
  * The `fs` router. Targets carry the path their provider displayed, so a target
  * produced by the remote side keeps going remote; paths are classified against
  * `remoteRoot` together with the caller's working directory.
- *
- * @param options - `{ local, remote, remoteRoots }`.
- * @returns the router to publish as `fs`.
  */
 export function createFsRouter({ local, remote, remoteRoots }: { local: object; remote: object; remoteRoots: () => readonly string[] }): any {
 	const overrides: RoutingOverrides = {}
@@ -234,9 +220,6 @@ export function createFsRouter({ local, remote, remoteRoots }: { local: object; 
  * the session's shell facts — so it follows `defaultSide`, and
  * `resolveExecutable` resolves locally first, falling back to the remote PATH
  * when nothing local provides the command.
- *
- * @param options - `{ local, remote, remoteRoots, defaultSide }`.
- * @returns the router to publish as `subprocess`.
  */
 export function createSubprocessRouter({ local, remote, remoteRoots, defaultSide = 'auto' }: {
 	local: object
@@ -281,16 +264,13 @@ export function createSubprocessRouter({ local, remote, remoteRoots, defaultSide
 }
 
 /**
- * Publish the routers for `fs` and `subprocess` to every consumer fiber.
+ * Publish the routers for `fs` and `subprocess` to every consumer fiber;
+ * returns a disposer that stops routing.
  *
  * The listener is registered on the context, so it is disposed with the plugin's
  * fiber; the `fiber` guard is required because the hook fires for this plugin's
  * own reads too, and `ctx.fs` inside the plugin must keep returning the local
  * provider — that is where the router borrows its local half from.
- *
- * @param ctx - the cordis context this plugin is mounted into.
- * @param routers - `{ fs, subprocess }`.
- * @returns a disposer that stops routing.
  */
 export function installRouting(ctx: Context, routers: Record<string, any>) {
 	const publish = (name: string) => routers[name]

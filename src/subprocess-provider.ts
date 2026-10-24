@@ -115,9 +115,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	_ripgrepPromise?: Promise<string>
 
 	/**
-	 * @param ctx - the cordis context.
-	 * @param config - `{ cwd, remoteShell }`.
-	 * @param transport - the {@link SshTransport} running remote commands.
 	 * @param slot - the service name to occupy: `'subprocess'` to replace the
 	 * app's runtime outright, or a private name for route mode.
 	 */
@@ -303,7 +300,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	/**
 	 * Ship the packaged ripgrep to the remote host, called at startup so the
 	 * first `glob` / `grep` already runs against the mapped binary.
-	 * @param localProgram - the locally packaged ripgrep path, when known.
 	 */
 	async warm(localProgram?: string): Promise<void> {
 		if (this._config.mapRipgrep === false || !localProgram) return
@@ -418,11 +414,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`
 	}
 
-	/**
-	 * Spawn one remote command and bind it to the contract's handle shape.
-	 * @param spec - fully specified argv, cwd, env, stdio dispositions, grace.
-	 * @returns a live handle with `done`, `collected`, `terminate`, `waitForExit`.
-	 */
+	/** Spawn one remote command and bind it to the contract's handle shape. */
 	spawn(spec: SpawnSpec): SpawnHandle {
 		this._validate(spec)
 		const stdio = spec.stdio ?? {}

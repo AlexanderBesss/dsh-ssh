@@ -155,8 +155,6 @@ export class SshTransport {
 	 * caps at 8191 characters. So the script rides stdin and a short bootstrap
 	 * writes it out. The file name carries a content hash, which makes staging
 	 * idempotent and keeps two plugin versions from overwriting each other.
-	 *
-	 * @returns the remote path of the staged agent script.
 	 */
 	#stageAgent(): Promise<string> {
 		if (this.#staged) return this.#staged
@@ -188,11 +186,6 @@ export class SshTransport {
 	 *
 	 * Closing stdin is not an optimization here — it is what makes delivery
 	 * reliable against the remote default shell.
-	 *
-	 * @param remoteCommand - the fully formed remote command line.
-	 * @param stdin - payload to write before EOF, when the command needs one.
-	 * @param timeoutMs - budget before the invocation is killed.
-	 * @returns resolved stdout, stderr, and exit code.
 	 */
 	#run(remoteCommand: string, stdin: string | undefined, timeoutMs: number): Promise<SshCallResult> {
 		return new Promise((resolve, reject) => {
@@ -257,11 +250,6 @@ export class SshTransport {
 	 * that answers in 530 ms most of the time occasionally stalls past any sane
 	 * deadline. Reads absorb that with one backed-off replay; a mutation never
 	 * replays, because its remote effect may already have landed.
-	 *
-	 * @param op - the agent operation name.
-	 * @param payload - operation arguments, JSON-safe.
-	 * @param options - per-call overrides.
-	 * @returns the operation result.
 	 */
 	async request(op: string, payload: Record<string, unknown> = {}, options: SshRequestOptions = {}): Promise<AgentResult> {
 		const scriptPath = await this.#stageAgent()
@@ -319,10 +307,6 @@ export class SshTransport {
 	 * Note: stdin written to this channel after the initial burst is not
 	 * delivered reliably, so interactive input to a remote command is not
 	 * supported.
-	 *
-	 * @param remoteCommand - the fully quoted remote command line.
-	 * @param options - spawn options handed to `child_process.spawn`.
-	 * @returns the local child process bound to the remote command.
 	 */
 	spawnCommand(remoteCommand: string, options: SpawnOptions = {}): ChildProcess {
 		return spawn(this.#config.sshBin, this.sshArgv(remoteCommand), {
