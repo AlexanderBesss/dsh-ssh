@@ -1,51 +1,18 @@
 /**
- * Prove that the local world and the remote world coexist in one session.
+ * Prove the local world and the remote world coexist in one session.
  *
- * WHY ROUTE MODE EXISTS
- * ---------------------
- * The plugin has always taken the app over app-wide: it registers `fs` and
- * `subprocess` and the patch layer disables the app's own local providers so
- * nothing else answers. Two facts in cordis 4.0.4 forced that shape, and both
- * are the reason a coexistence mode is a design change and not a config flag:
+ * Route mode exists because cordis forbids a second `fs` provider and a
+ * provider cannot delegate to the implementation it replaced (`this.ctx.fs` is
+ * itself); the plugin instead publishes a router on the `internal/get` read
+ * path and leaves the local providers registered.
  *
- * - Registering a second provider for a name throws
- *   `service "fs" has been registered at <...>`, so the plugin cannot ship a
- *   "local-aware" provider alongside the app's local one.
- * - Inside a provider of `fs`, `this.ctx.fs` resolves to the provider itself, so
- *   a provider can never delegate to the implementation it replaced. The local
- *   implementation is simply unreachable from inside the thing that must call it.
+ * This harness registers REAL local providers and counts every call reaching
+ * them: each check asserts the answer AND which implementation produced it —
+ * a router quietly serving everything over SSH would pass content-only checks,
+ * since the remote PC holds the same file names. Also covers a dead remote
+ * channel (TEST-NET-1 black hole) and the legacy `mode: 'replace'` takeover.
  *
- * Route mode lifts both. The plugin leaves the local providers registered and
- * installs a `ctx.on('internal/get', ...)` listener: consumers of `fs` and
- * `subprocess` are handed a ROUTER. Paths under the configured `remoteRoot` go
- * over SSH; everything else goes to the local implementation. Nothing is
- * disabled, so `read` on a local file keeps reading local files while `read` on
- * a remote path works on the remote PC.
- *
- * WHAT THIS HARNESS PROVES, AND HOW
- * ---------------------------------
- * It stands in for the app: two local providers are registered as REAL cordis
- * services, backed by `node:fs` and `node:child_process` rather than by stubs
- * returning canned values, and every call that reaches them is counted
- * (`localFsCalls`, `localSpawnCalls`). That counting is the whole point. A
- * router that quietly sent everything to SSH would pass every content-only
- * assertion, because the remote PC holds copies of the same file names. So each
- * check asserts both the answer AND which implementation produced it: a local
- * read must return local bytes AND move `localFsCalls`; a remote `stat` must be
- * answered with `localFsCalls` frozen; a spawn with a local `cwd` must print the
- * local root AND move `localSpawnCalls`, while the same spawn with the remote
- * `cwd` must print the remote path with `localSpawnCalls` NOT moving — that path
- * only exists on the remote PC, so it can only come over SSH.
- *
- * The last two checks cover the cases the patch layer hid. A SECOND context
- * mounted at `192.0.2.1` (TEST-NET-1, guaranteed to time out) has to keep
- * serving local reads and local commands with the remote channel permanently
- * dead — the shape a dropped VPN produces every day. And a THIRD context with no
- * local providers at all, mounted with `mode: 'replace'`, pins the legacy
- * app-wide takeover so the old deployment keeps working.
- *
- * The remote checks need the live remote PC, so run this on the machine that has
- * SSH access to it.
+ * The remote checks need the live remote PC.
  *
  * Usage: node dist/scripts/coexistence-check.js [host] [remoteRoot] [localRoot]
  *
@@ -74,17 +41,10 @@ const clock = { total: 0 }
 /** Every context this harness mounted, for teardown. */
 const contexts: { label: string; ctx: Context }[] = []
 
-/**
- * Counters per context. `localFsCalls` and `localSpawnCalls` are the two the
- * checks read, and they answer exactly one question: which implementation
- * served that call. `localSubprocessCalls` keeps non-spawn subprocess calls
- * (`resolveExecutable`, `terminalEnvironment`) out of `localSpawnCalls`, so a
- * spawn assertion measures spawns and nothing else.
- */
+// counters answer one question: which impl served the call; the spawn counter counts spawns only
 const stats = { localFsCalls: 0, localSpawnCalls: 0, localSubprocessCalls: 0 }
 const blackHoleStats = { localFsCalls: 0, localSpawnCalls: 0, localSubprocessCalls: 0 }
 
-/** Time one labelled check and print PASS/FAIL with its latency. */
 async function step(label: string, fn: () => any) {
 	const started = Date.now()
 	try {
@@ -101,12 +61,10 @@ async function step(label: string, fn: () => any) {
 	}
 }
 
-/** Which implementation the consumer is currently looking at, for failure text. */
 const implOf = (ctx: any) => `fs=${ctx.fs?.constructor?.name ?? 'none'} subprocess=${ctx.subprocess?.constructor?.name ?? 'none'}`
 
 const firstLine = (text: any) => String(text).split('\n').map((line) => line.trim()).filter(Boolean)[0] ?? ''
 
-/** LF-normalize, matching the local backend's model-facing text form. */
 const normalizeText = (content: any) => String(content).replaceAll('\r\n', '\n')
 
 function countOccurrences(content: string, needle: string) {
@@ -120,7 +78,6 @@ function countOccurrences(content: string, needle: string) {
 	}
 }
 
-/** Literal match-and-replace with the contract's not-found / ambiguous codes. */
 function applyLiteralEdit(content: string, oldString: any, newString: any, replaceAll: any, displayPath: string) {
 	const oldNorm = normalizeText(oldString)
 	if (oldNorm.length === 0) throw new FsError('old_string must be a non-empty string', 'FS_EDIT_NOT_FOUND')
@@ -133,19 +90,7 @@ function applyLiteralEdit(content: string, oldString: any, newString: any, repla
 	return { content: content.split(oldNorm).join(newNorm), replacements }
 }
 
-/**
- * The app's local filesystem, stood up for real.
- *
- * Registered as a real cordis service — `super(ctx)` occupies `fs` — so the
- * plugin collides with it exactly as it collides with the app's own local
- * provider, and a router delegating here gets bytes off disk.
- *
- * `_`-prefixed fields, never `#private`: cordis hands services out through a
- * proxy, so a method reached over `ctx.fs` runs with the proxy as its receiver,
- * and a private field is not reachable from a proxy (see src/seams.js).
- *
- * @extends FileSystem
- */
+// a real cordis service occupying `fs`, so the plugin collides with it exactly as with the app's provider. `_` fields, never `#` (see src/seams.js)
 class LocalFileSystem extends FileSystem {
 	_root: string
 	_counters: any
@@ -156,12 +101,11 @@ class LocalFileSystem extends FileSystem {
 		this._counters = counters
 	}
 
-	/** One increment per call: this is what proves the local impl answered. */
+	// one increment per call: this is what proves the local impl answered
 	_count() {
 		this._counters.localFsCalls += 1
 	}
 
-	/** Absolute path in the local execution world. */
 	_pathOf(target: any) {
 		return resolve(this._root, String(target?.displayPath ?? target))
 	}
@@ -314,11 +258,7 @@ class LocalFileSystem extends FileSystem {
 		return this._pathOf(target)
 	}
 
-	/**
-	 * The local world IS the harness host, so a host path maps straight through.
-	 * This is the half a remote provider cannot do, and the reason coexistence
-	 * needs the local implementation present rather than emulated.
-	 */
+	// host path maps straight through — the half a remote provider cannot do
 	override processPathFromHostPath(hostPath: any) {
 		this._count()
 		if (hostPath === undefined || hostPath === null) return undefined
@@ -336,11 +276,7 @@ class LocalFileSystem extends FileSystem {
 		return undefined
 	}
 
-	/**
-	 * Real `fs.watch`, so the contract surface is complete and a consumer that
-	 * watches a local path gets invalidations. The parent directory is watched
-	 * because `fs.watch` on a file dies when the file is replaced.
-	 */
+	// watches the PARENT dir: fs.watch on a file dies when the file is replaced
 	override watch(target: any, changed: () => void, signal?: AbortSignal) {
 		this._count()
 		signal?.throwIfAborted?.()
@@ -356,11 +292,7 @@ class LocalFileSystem extends FileSystem {
 	}
 }
 
-/**
- * Bounded in-memory tail with offset-based, non-consuming reads, matching the
- * collector shape the real local provider exposes. Not a cordis service, so it
- * keeps plain fields; only services must avoid `#private`.
- */
+// not a cordis service, so plain fields are fine; only services must avoid `#private`
 class OutputTail {
 	chunks: Buffer[] = []
 	bytes = 0
@@ -397,17 +329,7 @@ class OutputTail {
 	}
 }
 
-/**
- * The app's local subprocess runtime, stood up for real on
- * `node:child_process`, registered as the `subprocess` service.
- *
- * The handle shape mirrors the SSH provider exactly — `{ stdin, stdout, stderr,
- * control, collected, done, terminate, waitForExit }` — because a router that
- * mixes the two must be able to treat one handle like the other, and a shape
- * drift here would be a coexistence bug the harness is here to catch.
- *
- * @extends SubprocessRuntime
- */
+// the handle shape mirrors the SSH provider's exactly: shape drift would be a coexistence bug
 class LocalSubprocess extends SubprocessRuntime {
 	_counters: any
 
@@ -416,11 +338,6 @@ class LocalSubprocess extends SubprocessRuntime {
 		this._counters = counters
 	}
 
-	/**
-	 * Look an executable up in the local execution world (`where`, honouring the
-	 * caller's PATH layering and Windows PATHEXT). Counted separately so the
-	 * spawn assertions stay about spawns.
-	 */
 	async resolveExecutable(command: any, env: any, signal?: AbortSignal) {
 		signal?.throwIfAborted?.()
 		this._counters.localSubprocessCalls += 1
@@ -449,26 +366,18 @@ class LocalSubprocess extends SubprocessRuntime {
 		throw new SubprocessExecutableNotFoundError(`command ${JSON.stringify(name)} was not found on PATH`)
 	}
 
-	/** The local world's shell facts, so consumers pick this machine's shell. */
 	async terminalEnvironment(signal?: AbortSignal) {
 		signal?.throwIfAborted?.()
 		this._counters.localSubprocessCalls += 1
 		return { platform: process.platform, defaultShell: process.env.ComSpec ?? undefined }
 	}
 
-	/** Terminal sessions are not what this harness exercises. */
 	async spawnTerminal(spec: any) {
 		throw new Error('local stand-in: interactive terminal sessions are not implemented by this harness')
 	}
 
-	/** Nothing to pre-ship locally. */
 	async warm(localProgram: any) {}
 
-	/**
-	 * Spawn one local command, with the SSH provider's handle shape.
-	 * @param spec - argv, cwd, env, stdio dispositions, grace.
-	 * @returns a live handle.
-	 */
 	spawn(spec: any) {
 		this._counters.localSpawnCalls += 1
 		const argv = spec.argv ?? []
@@ -566,7 +475,6 @@ class ToolsStub extends Service {
 	}
 }
 
-/** Spawn through `ctx.subprocess` and collect, exactly as the pwsh tool does. */
 async function run(ctx: any, argv: string[], cwd: string) {
 	const handle = ctx.subprocess.spawn({
 		argv,
@@ -582,11 +490,7 @@ async function run(ctx: any, argv: string[], cwd: string) {
 	}
 }
 
-/**
- * Mount a consumer fiber and hand back the context it received. Tools in the app
- * are plugin fibers, and a plugin fiber is the only place cordis runs the read
- * waterfall, so this is the view that a routed `fs` / `subprocess` reaches.
- */
+// a plugin fiber is the only place cordis runs the read waterfall — the routed view
 async function consumerFiber(ctx: any) {
 	let scope: any
 	await ctx.plugin({
@@ -599,7 +503,6 @@ async function consumerFiber(ctx: any) {
 	return scope
 }
 
-/** Tear every context down, print the summary, and exit with the outcome. */
 async function finish() {
 	for (const entry of contexts) {
 		try {
@@ -619,8 +522,7 @@ if (!existsSync(localRoot) || !statSync(localRoot).isDirectory()) {
 	process.exit(2)
 }
 
-// Probe names carry the pid and the time, so a run interrupted by a crash leaves
-// no file a later run would read as its own.
+// probe names carry pid+time: a crashed run leaves no file a later run reads as its own
 const stamp = `${process.pid}-${Date.now()}`
 const localProbes = [
 	join(localRoot, `dsh-ssh-coexistence-read-${stamp}.txt`),
@@ -630,9 +532,7 @@ const localProbes = [
 const remoteClean = remoteRoot.replace(/[\\/]+$/, '')
 const remoteProbe = `${remoteClean}\\dsh-ssh-coexistence-${stamp}.txt`
 
-// The probe files are written with node:fs directly, so a passing local read is
-// proof of a local answer: nothing was ever written through the fs seam that
-// could have been answered remotely.
+// probes written with node:fs directly: a passing local read is proof of a local answer
 writeFileSync(localProbes[0], 'local world: read served here\n', 'utf8')
 writeFileSync(localProbes[2], 'edit me: marker\n', 'utf8')
 
@@ -663,15 +563,12 @@ await step('route mode mounts with the local providers registered (no duplicate-
 	return implOf(ctx)
 })
 if (mountError) {
-	// A duplicate `fs` registration is the exact failure route mode exists to
-	// avoid, so it is reported as the finding and the run stops here.
+	// a duplicate `fs` registration is the exact failure route mode exists to avoid
 	console.error(`plugin failed to apply: ${mountError?.message ?? mountError}`)
 	await finish()
 }
 
-// Consumers reach services through a plugin fiber: cordis runs the `internal/get`
-// waterfall only for plugin fibers, and that is exactly where routing happens.
-// A root-context read bypasses it, which is what the check below proves.
+// cordis runs the `internal/get` waterfall for plugin fibers only — routing lives there
 let scope: any
 const consumer = {
 	name: 'coexistence-consumer',
@@ -684,8 +581,7 @@ const consumer = {
 await step('a consumer fiber is handed the router, not the local provider', async () => {
 	await ctx.plugin(consumer)
 	const routed = scope.fs
-	// `ctx.get` reads the store directly, so this is the provider the app
-	// registered, seen the way a root context sees it (no waterfall).
+	// ctx.get reads the store directly — no waterfall, the root context's view
 	const direct = ctx.get('fs', false)
 	if (routed === direct) {
 		throw new Error(`the consumer fiber received the app's own provider (${routed?.constructor?.name}), so nothing was published on the read path (${implOf(scope)})`)
@@ -751,8 +647,7 @@ await step('remote write lands on the remote host', async () => {
 	if (stats.localFsCalls !== before) {
 		throw new Error(`the remote probe reached the local provider: localFsCalls ${before} → ${stats.localFsCalls} (${implOf(scope)})`)
 	}
-	// The fs contract has no delete, so removal runs over the subprocess seam,
-	// with a remote cwd — the same route the pwsh tool takes.
+	// the fs contract has no delete: removal runs over the subprocess seam, like the pwsh tool
 	const removed = await run(scope, ['cmd', '/c', 'del', '/q', remoteProbe], remoteRoot)
 	const after = await scope.fs.stat(target)
 	if (after?.type === 'file') {
@@ -843,8 +738,7 @@ await step('an unreachable ssh host cannot break local work', async () => {
 await step('legacy replace mode still replaces both providers app-wide', async () => {
 	const legacy = new Context()
 	contexts.push({ label: 'replace', ctx: legacy })
-	// No local providers here: this is the pre-coexistence deployment, where the
-	// patch layer disabled them and the plugin's providers were the only ones.
+	// no local providers: the pre-coexistence deployment, patch-disabled
 	new ToolsStub(legacy)
 	await legacy.plugin(sshPlugin as any, {
 		host,

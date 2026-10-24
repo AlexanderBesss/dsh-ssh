@@ -111,6 +111,3 @@ Good to know:
 - Occasionally an `ssh` invocation returns nothing at all; reads absorb that
   with one automatic retry, mutations never auto-retry (their effect may
   already have landed).
-
-Design rationale, measurements, and the exact transport constraints live in the
-headers of `cordis.patch.yml` and the `src/` modules, not here.

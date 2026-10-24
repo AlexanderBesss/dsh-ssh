@@ -1,37 +1,10 @@
 /**
- * `/ssh-workspace/api/*` — the host half of the remote-workspace picker.
- *
- * The client bundle (src/client) renders an "open a remote folder" browser
- * beside the workspace picker. It talks to this plugin through these routes;
- * nothing here reaches the model, and the browser never talks to SSH itself.
- *
- * Four routes, one JSON envelope each (`{ ok: true, data }` /
- * `{ ok: false, error: { message } }`, mirroring the docker-sandbox route
- * family):
- *
- * - `GET  /api/info`            host + remoteRoot facts for the dialog header
- * - `GET  /api/drives`          the remote PC's filesystem roots ("This PC")
- * - `GET  /api/browse?path=`    one remote level (directories only)
- * - `POST /api/mkdir`           create one remote directory (single segment)
- * - `POST /api/prepare`         assert the remote directory exists, create
- *                               the local mirror the workspace registry needs,
- *                               and join the path to the routing set
- *
- * The mirror is the load-bearing trick: the app's workspace registry
- * canonicalizes every workspace path through the LOCAL `fs.realpath` + `stat`
- * (dsh-workspace), so a path that only exists on the remote PC is refused at
- * creation and would fail session attach later. An empty local directory at
- * the same absolute path satisfies every local validation, while route mode
- * sends all real file and command traffic over SSH — the mirror stays empty
- * and is never read. Because a prepared path must be read over SSH, `prepare`
- * also registers it with the {@link WorkspaceRootStore}: the router classifies
- * it remote from then on, which is what lets the picker open *any* folder on
- * the remote PC, not only the configured root.
- *
- * Browsing is deliberately free — the whole remote PC — but paths must still
- * be absolute, well-formed Windows paths, and the whole family is fenced to
- * loopback + same-origin requests, following the pattern the git-graph route
- * family uses for its host routes.
+ * `/ssh-workspace/api/*` — the host half of the remote-workspace picker
+ * (browser half: src/client). Routes: info, drives, browse, mkdir, prepare.
+ * The whole family is fenced to loopback + same-origin requests. `prepare`
+ * makes an empty local mirror at the same absolute path — the workspace
+ * registry stats paths locally, while route mode serves the real traffic
+ * over SSH.
  *
  * @module dsh-ssh/workspace-routes
  */
@@ -43,26 +16,22 @@ import type { SshTransport } from './transport.js'
 import { isAbsolute, joinDir, normalize } from './remote-path.js'
 import type { WorkspaceRootStore } from './workspace-roots.js'
 
-/** The resolved plugin config subset these routes need. */
 export interface WorkspaceRouteConfig {
 	host: string
 	remoteRoot: string
 	remoteLabel: string
 }
 
-/** The slice of the `webServer` service these routes register on. */
 export interface WebServerLike {
 	register(route: { kind: string; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void }): () => void
 }
 
-/** One remote directory row for the browser. */
 export interface RemoteDirEntry {
 	name: string
 	path: string
 	hidden: boolean
 }
 
-/** One remote level: entries plus the parent breadcrumb step. */
 export interface RemoteBrowse {
 	path: string
 	root: string
@@ -70,12 +39,8 @@ export interface RemoteBrowse {
 	entries: RemoteDirEntry[]
 }
 
-/* ------------------------------------------------------------------ *
- * Loopback + same-origin fence (same semantics as the app's own
- * directory-picker-auto trust fence, and git-graph's shared copy).
- * ------------------------------------------------------------------ */
+// loopback + same-origin fence, same semantics as the app's own picker fence
 
-/** IPv4 127/8 predicate. */
 function isIPv4Loopback(v4: string): boolean {
 	const parts = v4.split('.')
 	return parts.length === 4
@@ -83,7 +48,6 @@ function isIPv4Loopback(v4: string): boolean {
 		&& parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
 }
 
-/** Whether a socket address names the loopback range (127/8, ::1, IPv4-mapped). */
 function isLoopbackAddress(address: string | undefined): boolean {
 	if (address === undefined) return false
 	const normalized = address.toLowerCase()
@@ -92,7 +56,6 @@ function isLoopbackAddress(address: string | undefined): boolean {
 	return isIPv4Loopback(normalized)
 }
 
-/** Whether a request comes from a loopback socket with a loopback Host and no cross-site markers. */
 function isLoopbackRequest(request: IncomingMessage): boolean {
 	if (!isLoopbackAddress(request.socket?.remoteAddress)) return false
 	const host = request.headers.host
@@ -114,15 +77,10 @@ function isLoopbackRequest(request: IncomingMessage): boolean {
 	}
 }
 
-/** Whether a hostname names the loopback authority. */
 function isLoopbackHostname(hostname: string): boolean {
 	if (hostname === 'localhost' || hostname === '[::1]') return true
 	return isIPv4Loopback(hostname)
 }
-
-/* ------------------------------------------------------------------ *
- * JSON plumbing (same envelope as the sandbox / git route families).
- * ------------------------------------------------------------------ */
 
 const JSON_BODY_MAX_BYTES = 32 * 1024
 
@@ -134,12 +92,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 const ok = (data: unknown) => ({ ok: true, data })
 const fail = (message: string) => ({ ok: false, error: { message } })
 
-/**
- * Read one JSON object body. A malformed body, or one over the cap, is
- * answered here (400 / 413) and reported as `null` so the caller returns
- * without touching an already-answered response — destroying the socket first
- * would only turn a clean 413 into a bare network error on the client.
- */
+/** Malformed/oversized bodies are answered here (400/413) and reported as `null`, so the caller must not touch the response again. */
 async function readJsonObject(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
 	const chunks: Buffer[] = []
 	let size = 0
@@ -174,16 +127,6 @@ function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error)
 }
 
-/* ------------------------------------------------------------------ *
- * Path policy: any absolute, well-formed Windows path on the remote PC.
- * ------------------------------------------------------------------ */
-
-/**
- * A request that is well-formed but refused by policy (malformed path, bad
- * segment name, missing remote directory). Surfaces as 400 rather than 500,
- * separating "you asked for something outside the rules" from "the plugin
- * failed".
- */
 class PolicyError extends Error {
 	constructor(message: string) {
 		super(message)
@@ -191,12 +134,7 @@ class PolicyError extends Error {
 	}
 }
 
-/**
- * Accept any absolute remote path, but nothing looser than that: the picker
- * browses the whole remote PC, yet relative fragments, drive-relative forms,
- * and wildcard characters stay refused. `normalize` then folds any `.`/`..`
- * segments away, so traversal cannot escape a path the operator typed.
- */
+/** Any absolute Windows path is browsable; relative/drive-relative/wildcards stay refused, and `normalize` folds traversal away. */
 function freePath(path: string): string {
 	const trimmed = path.trim()
 	if (trimmed === '') throw new PolicyError('a path is required')
@@ -206,9 +144,7 @@ function freePath(path: string): string {
 	if (/[*?"<>|]/.test(trimmed)) {
 		throw new PolicyError(`"${path}" contains characters that are illegal in Windows paths`)
 	}
-	// A colon anywhere past the drive specifier is an alternate-data-stream
-	// target (`C:\dir\file:stream`) or a mangled path — the remote .NET APIs
-	// would fail on it with an obscure 500, so refuse it with a clear 400.
+	// a colon past the drive = NTFS alternate data stream or mangled path — 400, not an obscure remote 500
 	const segments = trimmed.split(/[\\/]+/)
 	const driveSegments = /^[a-zA-Z]:(?:[\\/]|$)/.test(trimmed) ? 1 : 0
 	for (let index = driveSegments; index < segments.length; index += 1) {
@@ -219,12 +155,10 @@ function freePath(path: string): string {
 	return normalize(trimmed)
 }
 
-/** The parent level for the breadcrumb; null at a drive root (This PC is next). */
 function parentOf(target: string): string | null {
 	const trimmed = target.replace(/\\+$/, '')
 	if (/^[a-zA-Z]:$/.test(trimmed)) return null
-	// `\\server` (a bare server reference) has no sane parent either; "This PC"
-	// is the next step up.
+	// `\\server` has no sane parent either; "This PC" is next
 	if (/^\\\\[^\\]+$/.test(trimmed)) return null
 	const segments = trimmed.split('\\')
 	if (segments.length <= 1) return null
@@ -232,37 +166,25 @@ function parentOf(target: string): string | null {
 	return /^[a-zA-Z]:$/.test(parent) ? `${parent}\\` : parent
 }
 
-/** Whether `name` is safe as exactly one new directory segment on Windows. */
 function validSegment(name: string): boolean {
 	const trimmed = name.trim()
 	if (trimmed === '' || trimmed === '.' || trimmed === '..') return false
 	if (/[\\/:*?"<>|]/.test(trimmed)) return false
 	if (/[. ]$/.test(trimmed)) return false
-	// Reserved device names, case-insensitive, optionally with an extension.
+	// reserved Windows device names, case-insensitive, extension allowed
 	if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(trimmed)) return false
 	return true
 }
 
-/* ------------------------------------------------------------------ *
- * The route family.
- * ------------------------------------------------------------------ */
-
-/**
- * Register `/ssh-workspace` routes for the remote workspace picker; returns a
- * disposer that removes the route registration.
- */
 export function registerWorkspaceRoutes(
 	config: WorkspaceRouteConfig,
 	transport: SshTransport,
 	webServer: WebServerLike,
 	roots: WorkspaceRootStore,
 ): () => void {
-	// The remote agent knows files, not volumes; the drive list is one cheap
-	// one-shot PowerShell call, cached because volumes change rarely and the
-	// "This PC" view is opened often. The call gets its own kill timer —
-	// `requestTimeoutMs` guards agent requests, not `spawnCommand` — and
-	// concurrent opens coalesce onto one in-flight probe so a double click on
-	// "This PC" cannot mean two hung `ssh` processes.
+	// the agent knows files, not volumes: one-shot PowerShell probe, cached,
+	// own kill timer (requestTimeoutMs guards agent ops, not spawnCommand),
+	// concurrent opens coalesce so a double click cannot mean two hung ssh calls
 	let driveCache: { at: number; list: string[] } | undefined
 	let drivePending: Promise<string[]> | undefined
 	const probeDrives = (): Promise<string[]> => new Promise<string[]>((resolve, reject) => {
@@ -310,8 +232,7 @@ export function registerWorkspaceRoutes(
 				return list
 			})
 			drivePending = run
-			// Release the coalescing slot on success or failure; the rejection
-			// stays handled by the awaiting caller either way.
+			// release the coalescing slot either way; the caller handles the rejection
 			void run.then(() => {}, () => {}).finally(() => {
 				if (drivePending === run) drivePending = undefined
 			})
@@ -374,26 +295,17 @@ export function registerWorkspaceRoutes(
 				if (!remote.exists || remote.type !== 'directory') {
 					throw new PolicyError(`the remote path is not a directory: ${target}`)
 				}
-				// The local mirror. The workspace registry canonicalizes and
-				// stats paths with THIS machine's node:fs, so opening a remote
-				// folder as a workspace requires a local directory at the same
-				// absolute path. It stays empty; the router serves everything
-				// under a prepared path over SSH — which is why the path joins
-				// the root store right here, before the app adopts it.
+				// the workspace registry stats paths on THIS machine, so opening a remote
+				// folder needs an empty local dir at the same path; the router serves the
+				// traffic remotely — hence the path joins the root store right here
 				if (!win32.isAbsolute(target) || !isLocalAbsolute(target) || target.startsWith('\\\\')) {
-					// The mirror must be a folder on THIS machine. A UNC target
-					// would resolve the same way on both sides and the mkdir
-					// would write into the share itself — a remote directory
-					// posing as a local mirror, which breaks the whole trick.
+					// a UNC mirror would resolve the same on both sides: mkdir would write into the share itself
 					throw new PolicyError(`cannot mirror "${target}" locally — pick a drive-rooted folder (e.g. "C:\\...") for now`)
 				}
 				try {
 					await mkdir(target, { recursive: true })
 				} catch (cause: any) {
-					// The honest explanation: Windows guards other users'
-					// profile folders, so a path under another user's profile
-					// cannot be mirrored by this account. Both ways out are
-					// cheap; surface them instead of a raw EPERM.
+					// Windows guards other users' profile folders; surface the way out, not a raw EPERM
 					if (cause?.code === 'EPERM' || cause?.code === 'EACCES') {
 						throw new PolicyError(
 							`this machine refuses to create the mirror folder for "${target}" (Windows protects other users' profile folders). Either seed the path once from an elevated terminal (mkdir "${target}", then grant this account modify on "${win32.dirname(target)}"), or keep remote work under a plain folder such as "C:\\workplace" that mirrors cleanly.`,

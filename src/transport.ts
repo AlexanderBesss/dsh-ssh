@@ -1,35 +1,7 @@
 /**
- * SSH transport: staged remote agent, driven one request per SSH invocation.
- *
- * The plugin shells out to the system `ssh` client rather than embedding an SSH
- * stack. That is a deliberate choice for the `~/.ssh/config` authentication
- * model: Host aliases, `IdentityFile`, `ProxyJump`, `Match` blocks and a running
- * ssh-agent all keep working, and no private key material is ever read into
- * this process. A pure-Node client would have to reimplement config resolution
- * and jump hosting to reach the same place.
- *
- * WHY NOT A PERSISTENT AGENT
- * ---------------------------
- * The obvious design — one long-lived remote PowerShell reading line-delimited
- * JSON from stdin — was built, worked in isolation, and then failed against a
- * real Windows host. Windows OpenSSH runs remote commands through `cmd.exe`,
- * and stdin written to that channel after the initial burst never reaches the
- * grandchild process. Verified directly: a request sent at t=0 is answered, a
- * request sent at t=3s is never seen. `-tt` relays stdin progressively but
- * hands the session to an interactive `cmd.exe` instead of the requested
- * command, so it is not a fix either.
- *
- * So each operation is its own `ssh` invocation: the request rides stdin and
- * stdin is then closed, which is the one shape this channel delivers reliably.
- * It costs a connection per operation (roughly half a second on a LAN) and
- * there is no connection reuse available — Windows OpenSSH has no ControlMaster
- * equivalent. The `ctx.fs` README already expects a remote backend to pay per
- * round trip; this is that cost, measured rather than assumed.
- *
- * The upgrade path, when latency becomes the complaint, is the shape the API
- * catalog describes for `ctx.ssh`: the helper listens on the remote loopback and
- * each stream arrives over an independent SSH channel (`ssh -L` forwarding),
- * which sidesteps `cmd.exe` stdin entirely.
+ * SSH transport: one `ssh` invocation per operation, payload on stdin then
+ * close — Windows OpenSSH never delivers stdin past the initial burst to a
+ * long-lived reader, so a persistent agent does not work here.
  *
  * @module dsh-ssh/transport
  */
@@ -71,35 +43,19 @@ export class SshTransportError extends Error {
 	}
 }
 
-/**
- * Operations that are safe to replay after a transport failure.
- *
- * A mutation whose response was lost is ambiguous: the remote side may already
- * have applied it, and replaying would double-apply a write or re-append bytes.
- * Only reads are retried; a lost mutation surfaces as an error and the caller
- * decides.
- */
+/** Safe to replay after a transport failure; a lost mutation may already have landed, never replay it. */
 const REPLAYABLE_OPS = new Set(['ping', 'system', 'stat', 'list', 'read', 'range', 'where', 'mkdir', 'hash'])
 
-/**
- * Wait before replaying a read, so a channel that is briefly saturated gets a
- * chance to recover instead of failing on the second identical attempt.
- */
+/** Backoff before the single replay, to let a saturated channel recover. */
 const RETRY_BACKOFF_MS = 1500
 
 /** Resolved plugin configuration subset the transport drives on. */
 export interface SshTransportConfig {
-	/** SSH destination, resolved by the ssh client itself. */
 	host: string
-	/** ssh client binary. */
 	sshBin: string
-	/** Extra arguments for every invocation. */
 	sshArgs?: string[]
-	/** Shell hosting the agent on the remote. */
 	remoteShell: string
-	/** Budget for staging and the first probe. */
 	connectTimeoutMs: number
-	/** Budget for one operation. */
 	requestTimeoutMs: number
 }
 
@@ -112,7 +68,6 @@ export interface SshCallResult {
 
 /** Per-call overrides for {@link SshTransport.request}. */
 export interface SshRequestOptions {
-	/** Budget for this call, defaulting to config. */
 	timeoutMs?: number
 	/** Internal; marks the single allowed replay. */
 	retried?: boolean
@@ -137,25 +92,15 @@ export class SshTransport {
 		return this.#config.host
 	}
 
-	/** Cached `system` facts (remote machine, user, home, shell paths). */
 	get system() {
 		return this.#system
 	}
 
-	/** Assemble the argv for one `ssh` invocation against this host. */
 	sshArgv(remoteCommand: string): string[] {
 		return [...(this.#config.sshArgs ?? []), this.#config.host, remoteCommand]
 	}
 
-	/**
-	 * Stage the agent script on the remote host and return its path.
-	 *
-	 * The script is too large to inline: an `-EncodedCommand` blob for it runs to
-	 * about 21 KB, and the remote default shell is `cmd.exe`, whose command line
-	 * caps at 8191 characters. So the script rides stdin and a short bootstrap
-	 * writes it out. The file name carries a content hash, which makes staging
-	 * idempotent and keeps two plugin versions from overwriting each other.
-	 */
+	/** Too big for cmd.exe's command line: the script rides stdin; the hash-named file makes staging idempotent. */
 	#stageAgent(): Promise<string> {
 		if (this.#staged) return this.#staged
 		const hash = createHash('sha256').update(AGENT_SCRIPT, 'utf8').digest('hex').slice(0, 12)
@@ -181,12 +126,7 @@ export class SshTransport {
 		return this.#staged
 	}
 
-	/**
-	 * One `ssh` invocation: optional stdin payload, then EOF, then collect.
-	 *
-	 * Closing stdin is not an optimization here — it is what makes delivery
-	 * reliable against the remote default shell.
-	 */
+	/** Closing stdin after the payload is what makes delivery reliable on this channel. */
 	#run(remoteCommand: string, stdin: string | undefined, timeoutMs: number): Promise<SshCallResult> {
 		return new Promise((resolve, reject) => {
 			let child: ChildProcessByStdio<Writable, Readable, Readable>
@@ -243,14 +183,7 @@ export class SshTransport {
 		return this.request(op, payload, { ...options, retried: true })
 	}
 
-	/**
-	 * Run one agent operation.
-	 *
-	 * The channel is intermittently slow against Windows hosts — a connection
-	 * that answers in 530 ms most of the time occasionally stalls past any sane
-	 * deadline. Reads absorb that with one backed-off replay; a mutation never
-	 * replays, because its remote effect may already have landed.
-	 */
+	/** Run one agent operation; the channel stalling is absorbed by the single read-only replay. */
 	async request(op: string, payload: Record<string, unknown> = {}, options: SshRequestOptions = {}): Promise<AgentResult> {
 		const scriptPath = await this.#stageAgent()
 		const id = `r${++this.#sequence}`
@@ -268,8 +201,7 @@ export class SshTransport {
 			throw error
 		}
 
-		// The agent prints one JSON line per request; anything else on stdout is
-		// a remote banner and belongs with the diagnostics.
+		// The agent prints one JSON line per request; other stdout text is a remote banner.
 		const lines = stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
 		const answer = lines.map((line) => {
 			try {
@@ -297,17 +229,7 @@ export class SshTransport {
 		this.#system = await this.request('system', {})
 	}
 
-	/**
-	 * Spawn a remote command with piped stdio, as one `ssh` invocation.
-	 *
-	 * Killing the local client is the only termination primitive available here;
-	 * Windows OpenSSH tears the direct remote process down when its channel
-	 * closes, though descendants it spawned may survive.
-	 *
-	 * Note: stdin written to this channel after the initial burst is not
-	 * delivered reliably, so interactive input to a remote command is not
-	 * supported.
-	 */
+	/** One `ssh` invocation with piped stdio. Killing the local client is the only termination primitive. */
 	spawnCommand(remoteCommand: string, options: SpawnOptions = {}): ChildProcess {
 		return spawn(this.#config.sshBin, this.sshArgv(remoteCommand), {
 			stdio: ['pipe', 'pipe', 'pipe'],
@@ -316,11 +238,7 @@ export class SshTransport {
 		})
 	}
 
-	/**
-	 * Tear the channel down: nothing is held open between operations, but an
-	 * agent request still in flight must not outlive the plugin — unloading
-	 * used to leave those `ssh` processes running until their own deadline.
-	 */
+	/** An agent request still in flight must not outlive the plugin. */
 	close(): void {
 		this.#staged = undefined
 		this.#system = undefined

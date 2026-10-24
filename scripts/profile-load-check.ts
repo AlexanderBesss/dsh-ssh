@@ -1,20 +1,11 @@
 /**
- * Verify the INSTALLED copy of dsh-ssh inside a DSH profile.
+ * Verify the INSTALLED copy of dsh-ssh inside a DSH profile. A peer missing
+ * from that node_modules tree makes the entry throw and the plugin register
+ * nothing, unreported — importing + mounting the installed entry by path is
+ * the only check that catches it.
  *
- * The repo-side load test proves the code works. It cannot prove the installed
- * copy works, and those are different questions: a plugin under
- * `profiles/<profile>/node_modules` resolves bare specifiers from there upward,
- * so a peer that is not present in that tree makes the entry module throw, the
- * plugin registers nothing, and nothing in the app reports it. This script
- * imports the installed entry by path and mounts it, which is the only check
- * that catches that class of failure.
- *
- * Usage:
- *   node dist/scripts/profile-load-check.js [profile] [host] [remoteRoot]
- *
- * Run it with the app's own Node so the module graph matches what the app sees:
- *   <DSH_HOME>\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe \
- *     dist\scripts\profile-load-check.js desktop 192.168.0.68 'C:\Users\AI\workplace'
+ * Usage: node dist/scripts/profile-load-check.js [profile] [host] [remoteRoot]
+ * Run with the app's own Node so the module graph matches what the app sees.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -33,7 +24,7 @@ let pkg: any = {}
 try {
 	pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 } catch {
-	// Not installed: the `installed at` check below reports it, as it always did.
+	// not installed: the check below reports it
 }
 const exp = pkg.exports?.['.']
 const entry = join(packageDir, (typeof exp === 'string' ? exp : exp?.default) ?? pkg.main ?? 'dist/src/index.js')
@@ -49,8 +40,7 @@ check(`installed at ${packageDir}`, existsSync(packageDir))
 check('entry module present', existsSync(entry), entry)
 if (!existsSync(entry)) process.exit(1)
 
-// Bundle selection: without this the Plugins page has no row and the composition
-// never mounts the package.
+// without bundle selection the Plugins page has no row and the composition never mounts it
 const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
 const bundles = manifest.dsh?.profile?.bundles ?? []
 check('declared as a profile dependency', Object.keys(manifest.dependencies ?? {}).includes('dsh-ssh'), manifest.dependencies?.['dsh-ssh'])

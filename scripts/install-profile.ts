@@ -56,13 +56,7 @@ if (!existsSync(manifestPath)) {
 const readManifest = () => JSON.parse(readFileSync(manifestPath, 'utf8'))
 const writeManifest = (manifest: any) => writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 
-/**
- * Locate a pnpm that works against this profile.
- *
- * The desktop app ships its own, launched through the app binary with
- * `--expose-internals`; that is what the plugin manager invokes, and a pnpm
- * from elsewhere may resolve against a different registry or Node.
- */
+// the desktop app's own pnpm (via the app binary, --expose-internals) is what the plugin manager invokes; others may hit a different registry/Node
 function findPnpm() {
 	const explicit = flagValue('--pnpm')
 	if (explicit) return { command: explicit, args: [] }
@@ -92,7 +86,6 @@ function runPnpm(args: string[]) {
 	return result.status ?? 1
 }
 
-/** Select or deselect a bundle, preserving list order for everything else. */
 function setBundle(name: string, selected: boolean) {
 	const manifest = readManifest()
 	manifest.dsh ??= {}
@@ -128,9 +121,7 @@ if (action === 'add') {
 	process.exit(0)
 }
 
-// Removal follows the manager's order: deselect and unload before pnpm runs,
-// so a failure partway never leaves a selected bundle pointing at a removed
-// package.
+// deselect before pnpm remove: a mid-way failure never leaves a selected bundle pointing at a removed package
 setBundle('dsh-ssh', false)
 const status = runPnpm(['remove', 'dsh-ssh'])
 if (status !== 0) console.error(`pnpm remove reported a failure (exit ${status}); the bundle is already deselected`)

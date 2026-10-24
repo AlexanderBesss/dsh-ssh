@@ -1,42 +1,15 @@
 /**
- * dsh-ssh browser half: the remote PC's folder picker, seated in the app's
- * own workspace directory-flow holes.
- *
- * Both workspace entry points — the sidebar "+" beside "Workspaces" and the
- * New Session hero's workspace picker — declare a `*.directoryFlow` hole: the
- * owner (WorkspaceBrowser / WorkspacePicker) opens a picking interaction and
- * shares `open / busy / onPicked / onCancel / onError`. The shipped default
- * occupant runs the OS-native chooser; this plugin registers the same seats at
- * a LOWER priority (the lowest registered occupant renders), so the same "+"
- * button now browses the remote PC, while a "browse this PC…" action still
- * hands off to that very native chooser for local folders.
- *
- * Picking a remote folder runs `/api/prepare` first (remote stat + local
- * mirror + join the routing set), then adopts the path through the app's own
- * verbs — `workspaces.create`, `workspaces.rename` (the sidebar shows
- * `folder (remote)`, the label coming from the plugin's `remoteLabel`
- * config), `uiWorkspace.openWorkspace`. A LOCAL pick goes through the owner's
- * `onPicked`, untouched — the native flow names it and opens it.
- *
- * Remote facts come from this plugin's `/ssh-workspace/api/*` routes (see
- * src/workspace-routes.ts); the component never sees SSH.
- *
- * The browser half also carries the plugin's configuration page: the Plugins
- * surface gives every installed bundle's row a `plugins.row.config` hole, and
- * a row that fills it grows a "Configure" control opening the row's page.
- * This one renders host / remoteRoot / remoteLabel over the settings form the
- * Plugins page hands down — the same revision-fenced write path the app's own
- * plugin pages use, landing in the profile settings document.
- *
- * Written with createElement (no JSX) to keep the bundle toolchain identical
- * to the host half: tsc never needs to understand JSX.
+ * dsh-ssh browser half: remote folder picker seated in the app's
+ * `*.directoryFlow` holes at a lower priority than the shipped native
+ * occupant (lowest registered occupant renders), plus the plugin's
+ * Configure page in the `plugins.row.config` hole. Remote facts come from
+ * `/ssh-workspace/api/*`; no JSX on purpose — tsc never parses JSX here.
  *
  * @module dsh-ssh/client
  */
 
 import { createElement, Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
-/** The slot-registration shape both client UI cohorts accept. */
 interface SlotRegistration {
 	name: string
 	priority?: number
@@ -45,7 +18,6 @@ interface SlotRegistration {
 	registrant?: string
 }
 
-/** One settings-document write, exactly as the app's own plugin pages send them. */
 interface SettingsOp {
 	op: 'set' | 'unset'
 	path: string[]
@@ -67,47 +39,31 @@ interface ClientScope {
 		register: <Props>(registration: SlotRegistration, render: (props: Props) => unknown) => () => void
 	}
 	uiWorkspace: {
-		/** The Host-routed picker face; in the desktop shell the native global wins over it. */
 		pickDirectory: () => Promise<string | null>
-		/** The app's own "open this workspace" verb, as the owners use it. */
 		openWorkspace: (workspaceId: string) => Promise<void>
 	}
 	workspaces: {
-		// "the created or idempotently resolved Workspace" — re-picking a path
-		// that is already a Workspace resolves to the existing one.
+		// idempotent: re-picking an existing workspace path resolves to it
 		create: (input: { path: string }) => Promise<{ workspaceId: string; path: string; title: string }>
 		rename: (workspaceId: string, title: string) => Promise<unknown>
 	}
 }
 
-/** Props the directory-flow owners share with their occupant. */
 interface FlowProps {
 	open: boolean
 	busy: boolean
 	onPicked: (path: string) => void
 	onCancel: () => void
 	onError: (message: string) => void
-	/** Added by this registrant's `inject`: run the native local chooser. */
 	pickLocal: () => Promise<string | null>
-	/**
-	 * Added by this registrant's `inject`: adopt a prepared remote path —
-	 * create the workspace, mark its title with the remote label, and open
-	 * it the way the app itself would. Remote picks cannot go through
-	 * `onPicked` because that flow names the workspace after the folder,
-	 * and a remote workspace should say so.
-	 */
+	// remote picks bypass `onPicked`: that flow names the workspace after the folder
 	adoptRemote: (path: string, label: string) => Promise<void>
 }
 
 const REGISTRANT = 'dsh-ssh'
-// The shipped native occupant registers at the default 0; "register at a
-// different priority to shadow it (lowest renders)".
+// the shipped native occupant registers at 0; lowest registered priority renders
 const FLOW_PRIORITY = -10
 const FLOW_SEATS = ['sidebar.workspaces.directoryFlow', 'conversation.hero.workspace.directoryFlow'] as const
-
-/* ------------------------------------------------------------------ *
- * Route client (same envelope as the sandbox / git route families).
- * ------------------------------------------------------------------ */
 
 interface InfoView {
 	host: string
@@ -131,9 +87,7 @@ interface BrowseView {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-	// Merge rather than spread-and-replace: a POST body carries its own
-	// `content-type` header object, and a plain spread would silently drop
-	// the `accept` header set here.
+	// merge headers: a POST's own content-type object must not drop the accept header
 	const headers = new Headers(init?.headers)
 	if (!headers.has('accept')) headers.set('accept', 'application/json')
 	const response = await fetch(`/ssh-workspace/api/${path}`, { ...init, headers })
@@ -147,11 +101,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 	return body.data as T
 }
 
-/* ------------------------------------------------------------------ *
- * Styles: system colors so the panel follows the page's color scheme;
- * the shell's own controls are plain elements like docker-sandbox's.
- * ------------------------------------------------------------------ */
-
+// system colors so the panel follows the page's color scheme
 const panelStyle: Record<string, string> = {
 	boxSizing: 'border-box',
 	width: '640px',
@@ -227,16 +177,10 @@ const bigButtonStyle: Record<string, string> = {
 	textAlign: 'left',
 }
 
-/* ------------------------------------------------------------------ *
- * The flow occupant: a remote browser dialog, shown while `open` holds.
- * ------------------------------------------------------------------ */
-
 function RemoteDirectoryFlow(props: FlowProps) {
 	const { open, busy, onPicked, onCancel, onError, pickLocal, adoptRemote } = props
 	const [info, setInfo] = useState<InfoView | undefined>()
 	const [browse, setBrowse] = useState<BrowseView | undefined>()
-	// Two-way opening choice the operator asked for: local folder dialog or
-	// the remote browser, one seat for both.
 	const [view, setView] = useState<'choose' | 'remote'>('choose')
 	const [localBusy, setLocalBusy] = useState(false)
 	const [filter, setFilter] = useState('')
@@ -244,8 +188,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 	const [busyHere, setBusyHere] = useState('')
 	const [error, setError] = useState('')
 	const armed = useRef(false)
-	// Sequence guard for navigation: rapid folder clicks can land a stale
-	// listing on top of a fresh one, so only the newest request may commit.
+	// only the newest navigation may commit; stale listings must not land
 	const browseSeq = useRef(0)
 
 	const go = useCallback(async (path: string | null) => {
@@ -261,9 +204,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		}
 	}, [])
 
-	// Where the remote browser opens: the top of the remote's C: drive, so the
-	// whole PC is one click from the root rather than buried in `remoteRoot`.
-	// A remote whose C: is missing or unreachable still gets the drive list.
+	// open at the remote's C:\ so the whole PC is one click away; falls back to the drive list
 	const goHome = useCallback(async () => {
 		setError('')
 		const seq = ++browseSeq.current
@@ -275,9 +216,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		}
 	}, [go])
 
-	// Each rising `open` edge starts one fresh interaction, mirroring the
-	// native occupant's arming: re-renders (and the owner's `busy` adoption
-	// that keeps `open` true) never relaunch it.
+	// one fresh interaction per rising `open` edge; re-renders must not relaunch it
 	useEffect(() => {
 		if (!open) {
 			armed.current = false
@@ -322,17 +261,11 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		setBusyHere('opening…')
 		setError('')
 		try {
-			// prepare: assert the remote directory exists, stand up the local
-			// mirror the workspace registry validates against, and join the
-			// path to the routing set so its session talks to the remote PC.
 			await api('prepare', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ path: browse.path }),
 			})
-			// A remote pick is adopted here rather than through `onPicked`,
-			// because the owner names the workspace after the folder — and a
-			// remote workspace should say so: `folder (remote)`.
 			await adoptRemote(browse.path, info?.remoteLabel ?? 'remote')
 			onCancel()
 		} catch (cause: any) {
@@ -348,8 +281,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		try {
 			const path = await pickLocal()
 			if (path !== null && path !== undefined && path !== '') onPicked(path)
-			// A null cancel returns to the two-way choice — the operator may
-			// still want the remote browser they came for.
+			// a null cancel returns to the two-way choice
 			setView('choose')
 		} catch (cause: any) {
 			setError(cause?.message ?? String(cause))
@@ -386,15 +318,12 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		createElement(
 			'div',
 			{ style: panelStyle },
-			// Header.
 			createElement(
 				'div',
 				{ style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' } },
 				createElement('strong', { style: { fontSize: '14px' } }, 'New workspace — where is the folder?'),
 				createElement('button', { style: buttonStyle, onClick: onCancel }, 'close'),
 			),
-			// The two buttons the operator asked for — local or remote — and
-			// the remote browser behind the remote one.
 			view === 'choose'
 				? createElement(
 						'div',
@@ -422,9 +351,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 					)
 				: createElement(
 						Fragment,
-						null,
-						// Navigation: back to the choice, This PC / parent / configured root.
-						createElement(
+						null,						createElement(
 							'div',
 							{ style: rowStyle },
 							createElement('button', { style: buttonStyle, onClick: () => setView('choose') }, '≡ local / remote'),
@@ -447,9 +374,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 									'div',
 									{ style: { fontSize: '12px', opacity: 0.8 } },
 									`the channel to ${info.host} has not answered yet — the first browse may take a moment`,
-								),
-						// The level: filter + scrollable list (drives or folders).
-						createElement('input', {
+								),						createElement('input', {
 							style: inputStyle,
 							placeholder: 'filter this level…',
 							value: filter,
@@ -471,9 +396,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 											`${atDrives ? '💽' : '📁'} ${entry.name}`,
 										),
 									),
-						),
-						// New folder (disabled while the whole PC is shown).
-						createElement(
+						),						createElement(
 							'div',
 							{ style: rowStyle },
 							createElement('input', {
@@ -488,9 +411,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 							}),
 							createElement('button', { style: buttonStyle, disabled: atDrives, onClick: () => void createFolder() }, 'new folder'),
 						),
-					),
-			// The verbs: only for the remote browser; the choice row is its own verbs.
-			view === 'remote'
+					),			view === 'remote'
 				? createElement(
 						'div',
 						{ style: { ...rowStyle, justifyContent: 'flex-end' } },
@@ -515,12 +436,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 	)
 }
 
-/* ------------------------------------------------------------------ *
- * The Plugins page configuration card.
- * ------------------------------------------------------------------ */
-
-// The Plugins page keys a row's configuration slot `<package name>#<row id>`;
-// its page hands down `form: { state, mutate }` for that row's settings.
+// the row's config slot is keyed `<package name>#<row id>`; its page hands down `form: { state, mutate }`
 const ROW_CONFIG_KEY = 'dsh-ssh#ssh'
 
 const SETTINGS_FIELDS = [
@@ -529,13 +445,7 @@ const SETTINGS_FIELDS = [
 	{ key: 'remoteLabel', label: 'Remote marker', hint: 'titles become “my-project (remote)”' },
 ] as const
 
-/**
- * Why a draft value for this field cannot be saved, in one line, or
- * `undefined` when it can. Refusing here is cheaper than persisting a
- * setting that makes the plugin's `apply` refuse to start at the next boot —
- * an empty host or a relative `remoteRoot` takes the whole plugin down
- * invisibly from this page's point of view.
- */
+/** refuse a save here rather than persist a setting that would make `apply` fail at the next boot */
 function fieldProblem(key: string, value: string): string | undefined {
 	const trimmed = value.trim()
 	switch (key) {
@@ -704,17 +614,10 @@ function SshSettingsForm(props: RowPageProps) {
 	)
 }
 
-/* ------------------------------------------------------------------ *
- * Entry.
- * ------------------------------------------------------------------ */
-
 export const inject = ['slots']
 
 export function apply(ctx: ClientScope): void {
-	// uiWorkspace carries the Host-routed picker; the desktop shell also sets
-	// the native global. Both faces of "choose a local folder" therefore work
-	// from wherever this plugin lands — same choice the shipped native
-	// occupant itself makes.
+	// uiWorkspace carries the Host-routed picker; the desktop shell also sets the native global
 	ctx.inject(['uiWorkspace', 'workspaces'], (scope: ClientScope) => {
 		const pickLocal = async (): Promise<string | null> => {
 			const native = (globalThis as any).__DSH_DIRECTORY_PICKER__
@@ -722,15 +625,8 @@ export function apply(ctx: ClientScope): void {
 			return scope.uiWorkspace.pickDirectory()
 		}
 		const adoptRemote = async (path: string, label: string): Promise<void> => {
-			// The same verbs the app's own flow uses, plus the rename that
-			// marks the workspace as remote in the sidebar. `create` is
-			// idempotent — re-picking an existing workspace path resolves it.
 			const created = await scope.workspaces.create({ path })
-			// The app titles a fresh workspace after the folder itself, and
-			// that default title is what gets the marker. A title the user
-			// renamed by hand is left alone, and one that already carries a
-			// marker — possibly under an older `remoteLabel` — never grows a
-			// second suffix, which an `endsWith` test alone would allow.
+			// compare against the default title, not `endsWith`: an existing marker must never double up
 			const source = created.path ?? path
 			const defaultTitle = source.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? source
 			if (created.title === defaultTitle) {
@@ -752,14 +648,7 @@ export function apply(ctx: ClientScope): void {
 		)
 	})
 
-	// The Plugins page: filling `plugins.row.config` with this bundle's row key
-	// (`<package name>#<row id>`) is what grows the "Configure" control on the
-	// row and opens the row's page, where the Host hands down its own
-	// `form: { state, mutate }` for the row's settings. The row is the gate:
-	// this client half ships bundled with the very row that declares `ssh`,
-	// and the page dispatches the key only for that row. (The first version
-	// rode a `configForms` service — there is no such Client Service, so the
-	// injection could never fire; verified against the live Client catalog.)
+	// filling `plugins.row.config` with `<package name>#<row id>` grows the row's Configure control
 	ctx.inject(['slots'], (scope: ClientScope) =>
 		scope.slots.inject('plugins.row.config', () =>
 			scope.slots.register({ name: 'plugins.row.config', key: ROW_CONFIG_KEY, registrant: REGISTRANT }, (rowProps: RowPageProps) =>

@@ -1,14 +1,8 @@
 /**
- * Ambient declaration for `@deepseek-ai/dsh-tools`.
- *
- * The package lives inside `app.asar` and is NOT resolvable from a plugin's
- * module path — see the header of `seams.ts` for why. The plugin imports it
- * dynamically and copes with the import failing, so the compile-time shape
- * here exists to type that attempt, not to promise the package is present.
- *
- * This file must stay a global script (no top-level import/export), otherwise
- * the `declare module` turns into an augmentation of a module that does not
- * exist, which TypeScript rejects.
+ * `@deepseek-ai/dsh-tools` lives inside app.asar and is not resolvable from a
+ * plugin's module path; the dynamic import copes with failure.
+ * This file must stay a global script (no top-level import/export), or the
+ * `declare module` becomes an augmentation TypeScript rejects.
  */
 
 declare module '@deepseek-ai/dsh-tools' {

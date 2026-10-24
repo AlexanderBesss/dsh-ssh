@@ -1,26 +1,9 @@
 /**
- * How does the cordis composition behave when the plugin's provider, the app's
- * local provider, and (optionally) a service interceptor meet — including when
- * the plugin is built against a SECOND copy of cordis?
- *
- * Two questions this settles, both of which decide the architecture of
- * local/remote coexistence:
- *
- * 1. Provider precedence. The plugin registers `fs`; the app's local backend
- *    registers `fs`. Whoever loses is invisible, so a patch that disables the
- *    local one plus a provider that never registers is the same outcome: no `fs`
- *    at all, and every file tool in the app stops working. This prints who wins
- *    in each mount order.
- *
- * 2. Delegation. To serve remote and local paths side by side, the plugin has to
- *    reach the local implementation. `ctx.fs` from inside the plugin's own
- *    provider is a self-reference; an interceptor receives the implementation
- *    directly. This measures which of those is usable, from a plugin built
- *    against its own copy of the library.
- *
- * The app's own cordis lives inside `app.asar`, unreachable from plain Node, so
- * the "two copies" condition is reproduced the faithful way: two independent
- * copies of the same version, one acting as the app, one as the plugin.
+ * How the cordis composition behaves when the plugin's provider, the app's
+ * local provider, and an interceptor meet — with the plugin built against a
+ * SECOND copy of cordis (the app's own lives in app.asar, so two copies of
+ * the same version reproduce it faithfully). Settles provider precedence per
+ * mount order, and whether any delegation path out of a provider works.
  *
  * Usage: node dist/scripts/provider-wiring-check.js
  */
@@ -60,8 +43,7 @@ for (const pkg of ['cordis', 'schemastery']) {
 const appTree = buildTree('app')
 const pluginTree = buildTree('plugin')
 
-// The plugin side, against ITS OWN copy of the libraries, exactly as a linked
-// install resolves: Schema config + a provider registered as `fs`.
+// the plugin side, against ITS OWN copy of the libraries, as a linked install resolves
 writeFileSync(join(pluginTree, 'plugin.mjs'), `
 import Schema from '@deepseek-ai/schemastery'
 import { Service } from '@deepseek-ai/cordis'
@@ -120,7 +102,7 @@ export function installRouter(ctx, marker) {
 }
 `, 'utf8')
 
-// The app side: its own copies, five phases, each on a fresh Context.
+// the app side: its own copies, five phases, each on a fresh Context
 writeFileSync(join(appTree, 'probe.mjs'), `
 import { Context, Service } from '@deepseek-ai/cordis'
 
@@ -255,8 +237,7 @@ if (run.status !== 0) {
 		console.log(`  ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
 	}
 	check('the local provider serves ctx.fs on its own', out.phase1_localOnly === 'local', out.phase1_localOnly)
-	// Measured facts, not expectations: this is what makes an app-wide takeover
-	// (mode: 'replace') need a patch layer, and why route mode exists at all.
+	// measured facts, not expectations — the evidence for why route mode exists
 	check('a second fs provider throws when the plugin mounts first', String(out.phase2_pluginFirst).startsWith('threw: service "fs" has been registered'), out.phase2_pluginFirst)
 	check('a second fs provider throws in the real app order too', String(out.phase3_pluginSecond).startsWith('threw: service "fs" has been registered'), out.phase3_pluginSecond)
 	check('config is resolved and reaches apply()', typeof out.phase3_seen?.config?.marker === 'string', JSON.stringify(out.phase3_seen?.config))

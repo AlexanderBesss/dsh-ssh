@@ -1,22 +1,3 @@
-/**
- * SSH-backed `ctx.fs` provider.
- *
- * Implements the `dsh-fs` provider contract against a remote Windows host, so
- * the model-facing `read` / `write` / `edit` tools operate there with no change
- * of their own. The contract is what makes this possible: it names what a
- * storage layer can do and never how it stores bytes, and its own documentation
- * treats a remote backend as an expected shape rather than an experiment.
- *
- * Identity and I/O paths are deliberately separated. `targetKey` is case-folded
- * so the same file reached as `D:\Src\A.ts` and `D:\src\a.ts` shares one stale
- * version guard, mirroring what `fs.realpath` gives the local backend on NTFS.
- * `displayPath` keeps the caller's spelling and is the path actually used for
- * I/O, so a new file is created with the case the model asked for rather than a
- * folded one.
- *
- * @module dsh-ssh/fs-provider
- */
-
 import type { Context } from '@deepseek-ai/cordis'
 import { FsError, FsTargetKey, FsVersion, FileSystem } from './seams.js'
 import type {
@@ -34,28 +15,18 @@ import { RemoteAgentError } from './transport.js'
 import type { AgentResult, SshTransport } from './transport.js'
 import { contains, normalize, resolvePath, targetKey } from './remote-path.js'
 
-/** Configuration this provider is constructed with: the remote workspace root. */
 export interface SshFileSystemConfig {
-	/** The remote directory relative paths resolve against. */
 	cwd: string
-	/** Cap on the content snapshot returned alongside a write, for diffs. */
 	diffBasisMaxBytes?: number
 }
 
-/** Which line-ending style a file used. */
 type LineEndings = 'CRLF' | 'LF'
 
-/** Leading bytes scanned for a NUL before a file is treated as text. */
 const BINARY_SAMPLE_BYTES = 8192
-/** Default cap on the content snapshot returned alongside a write, for diffs. */
 const DEFAULT_DIFF_BASIS_MAX_BYTES = 10 * 1024 * 1024
-/** Byte window of the incremental decode in `streamText`. */
 const TEXT_CHUNK_BYTES = 64 * 1024
 
-/**
- * Translate a transport or agent failure into the `dsh-fs` error taxonomy.
- * Callers branch on `code`, never on message text, so the mapping stays here.
- */
+/** Failures are mapped into the `FS_*` taxonomy here; callers branch on `code`, never on message text. */
 function toFsError(error: unknown, displayPath: string, verb: string): FsError {
 	if (error instanceof FsError) return error
 	if (error instanceof RemoteAgentError) {
@@ -72,14 +43,12 @@ function normalizeLineEndings(content: string): string {
 	return content.replaceAll('\r\n', '\n')
 }
 
-/** Which style a file used, decided from its leading 4 KiB. */
 function detectLineEndings(raw: string): LineEndings {
 	const sample = raw.slice(0, 4096)
 	const crlfCount = sample.split('\r\n').length - 1
 	return crlfCount > sample.split('\n').length - 1 - crlfCount ? 'CRLF' : 'LF'
 }
 
-/** Convert LF-normalized content back to the style the file had. */
 function restoreLineEndings(content: string, lineEndings: LineEndings): string {
 	return lineEndings === 'LF' ? content : normalizeLineEndings(content).split('\n').join('\r\n')
 }
@@ -95,7 +64,6 @@ function countOccurrences(content: string, needle: string): number {
 	}
 }
 
-/** Literal match-and-replace with the contract's not-found / ambiguous codes. */
 function applyLiteralEdit(content: string, oldString: string, newString: string, replaceAll: boolean | undefined, displayPath: string): { content: string; replacements: number } {
 	const oldNorm = normalizeLineEndings(oldString)
 	if (oldNorm.length === 0) throw new FsError('old_string must be a non-empty string', 'FS_EDIT_NOT_FOUND')
@@ -113,23 +81,18 @@ export class SshFileSystem extends FileSystem {
 	_config: SshFileSystemConfig
 	_locks = new Map<string, Promise<unknown>>()
 
-	/**
-	 * @param slot - the service name to occupy: `'fs'` to replace the app's
-	 * filesystem outright, or a private name to stay unregistered from the
-	 * consumer's point of view (route mode, where a router answers `fs`).
-	 */
+	/** `'fs'` takes the public name; a private name stays invisible to consumers (route mode). */
 	constructor(ctx: Context, config: SshFileSystemConfig, transport: SshTransport, slot = 'fs') {
 		super(ctx, slot)
 		this._config = config
 		this._transport = transport
 	}
 
-	/** The remote directory relative paths resolve against. */
 	get root() {
 		return this._config.cwd
 	}
 
-	/** Serialize mutations per target, as the contract's critical section requires. */
+	/** Mutations serialize per target — the contract's critical section. */
 	async _withLock<T>(key: string, op: () => T | Promise<T>): Promise<T> {
 		const run = (this._locks.get(key) ?? Promise.resolve()).then(op, op)
 		const tail = run.then(() => void 0, () => void 0)
@@ -141,7 +104,6 @@ export class SshFileSystem extends FileSystem {
 		}
 	}
 
-	/** The case-preserved path used for actual I/O. */
 	_pathOf(target: Pick<FsTarget, 'displayPath'>): string {
 		return String(target.displayPath)
 	}
@@ -168,13 +130,7 @@ export class SshFileSystem extends FileSystem {
 		return String(target.displayPath)
 	}
 
-	/**
-	 * No host path identifies a file in this execution world: the harness host
-	 * and the remote machine are different machines. Returning `undefined` is
-	 * the contract's answer for "this world cannot read that host file", and it
-	 * is what keeps a local file reference from being silently treated as a
-	 * remote one.
-	 */
+	/** The remote world has no path that identifies a host file; `undefined` is the contract's answer. */
 	override processPathFromHostPath(): string | undefined {
 		return undefined
 	}
@@ -213,14 +169,12 @@ export class SshFileSystem extends FileSystem {
 		}
 	}
 
-	/** Reject bytes that start with a NUL, the way the local backend refuses binaries. */
 	_assertNotBinary(buffer: Buffer, displayPath: string, verb: string): void {
 		if (buffer.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
 			throw new FsError(`cannot ${verb} "${displayPath}": binary file`, 'FS_NOT_TEXT')
 		}
 	}
 
-	/** One agent `read` call returned as bytes, mapped into the fs error taxonomy. */
 	async _readRaw(displayPath: string, verb: string): Promise<Buffer> {
 		let response: AgentResult
 		try {
@@ -231,7 +185,6 @@ export class SshFileSystem extends FileSystem {
 		return Buffer.from(response.base64, 'base64')
 	}
 
-	/** One agent `stat` call, mapped into the fs error taxonomy. */
 	async _statRaw(displayPath: string, verb: string): Promise<AgentResult> {
 		try {
 			return await this._transport.request('stat', { path: displayPath })
@@ -240,7 +193,6 @@ export class SshFileSystem extends FileSystem {
 		}
 	}
 
-	/** Decode remote bytes as UTF-8, rejecting binaries the way the local backend does. */
 	_decodeText(buffer: Buffer, displayPath: string, verb: string): string {
 		this._assertNotBinary(buffer, displayPath, verb)
 		try {
@@ -374,12 +326,6 @@ export class SshFileSystem extends FileSystem {
 		})
 	}
 
-	/**
-	 * Literal edit, kept on this seam so the version check, the literal match
-	 * and the rewrite share one critical section. The read-modify-write happens
-	 * in-process against remote bytes; the contract allows a remote backend to
-	 * do this natively, and this is the honest non-native form.
-	 */
 	async editText(target: FsTarget, edit: FsEdit, expected?: FsExpected | null, signal?: AbortSignal): Promise<FsEditResult> {
 		this._aborted(signal, 'edit')
 		const displayPath = this._pathOf(target)

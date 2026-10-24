@@ -1,12 +1,6 @@
 /**
- * Prove the plugin can work a real project that lives on the remote PC.
- *
- * Where load-test.ts asserts the provider contract, this drives the same
- * sequence the model-facing tools perform against a live project directory:
- * list, read, write, edit, delete, search with the mapped ripgrep, and build
- * commands through `ctx.subprocess`. Every step is timed, because per-operation
- * latency is the property that decides whether remote work is usable.
- *
+ * Drive the model-facing tool sequence (list/read/write/edit/search/build)
+ * against a live project on the remote PC, timing every step.
  * Usage: node dist/scripts/remote-project-check.js <host> <projectRoot> [localRgExe]
  */
 
@@ -21,7 +15,6 @@ const localRg = process.argv[4]
 const results: any[] = []
 const clock = { total: 0 }
 
-/** Time one labelled phase and record pass/fail with its latency. */
 async function step(label: string, fn: () => any) {
 	const started = Date.now()
 	try {
@@ -38,7 +31,6 @@ async function step(label: string, fn: () => any) {
 	}
 }
 
-/** Run one remote command through the subprocess seam and collect its output. */
 function run(ctx: any, argv: string[], cwd: string): Promise<any> {
 	return new Promise((resolve, reject) => {
 		const handle = ctx.subprocess.spawn({
@@ -57,9 +49,7 @@ function run(ctx: any, argv: string[], cwd: string): Promise<any> {
 
 const firstLine = (text: any) => String(text).split('\n').map((line) => line.trim()).filter(Boolean)[0] ?? ''
 
-// The plugin declares `inject: ['tools']`, so a stand-in has to *provide* that
-// name: without the super(ctx, 'tools') call the plugin silently never starts,
-// and every service it registers comes back undefined.
+// the plugin injects `tools`: a stand-in must PROVIDE that name (super(ctx,'tools')), or the plugin silently never starts
 class ToolsStub extends Service {
 	constructor(ctx: Context) {
 		super(ctx, 'tools')
@@ -86,11 +76,8 @@ if (!ctx.fs || !ctx.subprocess) {
 }
 console.log(`mounted: ctx.fs=${ctx.fs.constructor.name} ctx.subprocess=${ctx.subprocess.constructor.name}\n`)
 
-// The harness ships ripgrep inside app.asar, which a plain node run cannot see,
-// so hand the provider the same path the search tools would have handed it.
-// `warm()` is what plugin startup calls, and this step times it: re-uploading
-// 5 MB over this channel costs minutes, a verified reuse costs seconds, and that
-// difference is the startup cost of every remote session.
+// ripgrep lives inside app.asar, invisible to plain node: hand the provider the same path the search tools would.
+// warm() timing matters: re-upload costs minutes, verified reuse seconds — the startup cost of every remote session
 await step('warm the remote ripgrep (mapRipgrep)', async () => {
 	const usable = localRg && (() => { try { statSync(localRg); return true } catch { return false } })() ? localRg : undefined
 	if (!usable) throw new Error('no local rg.exe given; pass one as argv[3]')
@@ -111,8 +98,7 @@ await step('find a source file in the project (recursive list)', async () => {
 	const stack = [root]
 	const files: any[] = []
 	let listed = 0
-	// Six levels, because the project root is the configured remoteRoot and a
-	// real project keeps interesting files deeper than the top two directories.
+	// six levels deep: real projects keep interesting files below the top dirs
 	for (let depth = 0; depth < 6 && stack.length && files.length < 5; depth += 1) {
 		const level = stack.splice(0, stack.length)
 		for (const dir of level) {
@@ -161,8 +147,7 @@ await step('search the project with ripgrep (grep tool path)', async () => {
 	return `${hits.length} match lines, first: ${firstLine(found.stdout)}`
 })
 
-// The search tools hand argv[0] as the *local* packaged rg path, which does not
-// exist remotely. The provider must rewrite it onto its own remote copy.
+// search tools hand argv[0] as the LOCAL packaged rg path — the provider must rewrite it onto its remote copy
 await step('rewrite the local rg argv[0] onto the remote copy', async () => {
 	if (!localRg) throw new Error('no local rg path given; pass it as argv[3]')
 	const found = await run(ctx, [localRg, '--files', projectRoot], projectRoot)

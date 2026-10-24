@@ -1,102 +1,41 @@
-# dsh-ssh bundle patch.
-#
-# What it does: mounts dsh-ssh in route mode. Nothing is withdrawn.
-#
-# Route mode (the default) leaves the app's own `fs` and `subprocess` providers
-# registered and active. The plugin publishes a router on the read path, and the
-# router classifies one call at a time: a path under `remoteRoot` is served over
-# SSH, every other path is served by the local provider. A session can therefore
-# open a remote project and still read this machine's files, and an unreachable
-# remote host cannot take the local tools down with it.
-#
-# Why not replace the providers? Both halves of that arrangement fail in
-# opposite directions, measured against cordis 4.0.4: registering a second
-# provider for `fs` is a hard error (`service "fs" has been registered at ...`),
-# so the local one has to be withdrawn first; and if the SSH provider then fails
-# to construct, the app has no filesystem at all. Route mode has no such
-# coupling. See src/routing.ts for the mechanism.
-#
-# Install:
-#   dsh plugin --profile desktop add <path-or-package-name>
-# then set `host` and `remoteRoot` below (or override them in the profile's own
-# cordis.patch.yml, which is applied after this layer).
+# dsh-ssh bundle patch: mounts dsh-ssh in route mode — `remoteRoot` is served
+# over SSH, every other path stays local, nothing is withdrawn. See README.md.
 
 - insert:
     - id: ssh
       name: dsh-ssh
       config:
-        # SSH destination, resolved exactly as the `ssh` CLI resolves it, so
-        # ~/.ssh/config Host aliases, IdentityFile, ProxyJump and a running
-        # ssh-agent all work with no credential handling in this plugin.
-        # The user-facing place to change it is the profile's own
-        # cordis.patch.yml (a `- id: ssh` entry), applied after this layer.
+        # resolved by the `ssh` CLI, so ~/.ssh/config Host aliases just work;
+        # override in the profile's own cordis.patch.yml (applied after this layer)
         host: 192.168.0.68
 
-        # The marker remote workspaces get in the sidebar: "my-project
-        # (remote)". Set an IP or machine name if several remotes join.
+        # sidebar marker: "my-project (remote)"
         remoteLabel: remote
 
-        # Absolute path ON THE REMOTE machine. In route mode this is the one
-        # path prefix that is served remotely; everything else stays local.
-        # Windows syntax on a Windows remote.
-        #
-        # Opening a remote workspace from the UI also creates a real local
-        # directory at the identical path (the workspace registry stats the
-        # path locally and realpath rejects junctions). Pick a root whose
-        # ancestors are user-writable on BOTH machines — C:\Users\Public\...
-        # is the friction-free choice; C:\Users\<name>\... needs a one-time
-        # elevated seed on the machine hosting the app.
+        # absolute path on the REMOTE machine; opening a remote workspace also
+        # creates an empty local mirror at the identical path, so pick one whose
+        # ancestors are user-writable on BOTH machines — C:\Users\Public\... works,
+        # C:\Users\<name>\... needs a one-time elevated seed on the local machine
         remoteRoot: 'C:\Users\Public\workplace'
 
-        # 'route' (default): local and remote side by side. This row is the
-        # route-mode entry (`name: dsh-ssh`), and route is the only mode it
-        # runs — its inject gate waits for the app's fs/subprocess, which a
-        # replace-mode composition withdraws. A `mode: replace` written here
-        # is downgraded to route with a warning; the remote-only takeover is
-        # a separate entry, `dsh-ssh/replace` (see the bottom of this file).
+        # this row is the route-mode entry; the remote-only takeover is the
+        # separate `dsh-ssh/replace` entry at the bottom
         mode: route
 
-        # Which world answers `terminalEnvironment()` — the one call that
-        # carries no working directory. 'auto' / 'local' report this machine,
-        # which is also correct for a Windows-to-Windows remote (same platform,
-        # same cmd.exe path). Set 'remote' when the remote is not Windows.
-        # defaultSide: auto
-
-        # SSH client binary. Windows OpenSSH is at
-        # C:\Windows\System32\OpenSSH\ssh.exe and is on PATH when installed.
+        # defaultSide: auto   # 'remote' when the remote is not Windows
         # sshBin: ssh
-
-        # Extra arguments handed to every ssh invocation. BatchMode is what
-        # turns a missing key or passphrase into a fast error instead of a
-        # prompt that no one will ever see, since these invocations are not
-        # attached to a terminal.
-        sshArgs: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
-
-        # Shell hosting the file operations on the remote. `powershell` is
-        # Windows PowerShell 5.1 (always present on Windows); use `pwsh` when
-        # PowerShell 7 is installed remotely.
         # remoteShell: powershell
-
-        # Map the locally packaged ripgrep (used by glob/grep) onto the remote
-        # host. The plugin uploads its own rg.exe to the remote once, so no
-        # remote install is needed. Set false to disable and let glob/grep fail.
         # mapRipgrep: true
-
-        # Milliseconds to wait for the remote channel to come up, and for one
-        # file operation. One ssh invocation carries each operation, so these
-        # budgets bound a call, not a session.
         # connectTimeoutMs: 20000
         # requestTimeoutMs: 30000
 
-# --- the remote-only shape: mode 'replace' ------------------------------------
-# A session that lives entirely on the remote PC. This is a different entry —
-# `dsh-ssh/replace` — because its inject gate must NOT wait for the app's
-# fs/subprocess (it provides them), and a single module-level gate cannot
-# serve both shapes. Uncomment all four rows together to try it. Nothing local
-# is reachable while the two provider rows are disabled, and if the SSH
-# providers fail to come up the app has NO filesystem at all. The route-mode
-# row above is also disabled: with the local providers withdrawn, its gate can
-# never be satisfied, so it would sit pending forever.
+        # these ssh calls have no terminal: BatchMode turns a missing key into a fast error, never a hidden prompt
+        sshArgs: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+
+# --- remote-only shape (mode 'replace'): uncomment ALL FOUR rows together -----
+# nothing on this machine stays reachable, and if the SSH providers fail the
+# app has NO filesystem. the route row above must be disabled — its gate waits
+# for the providers these rows withdraw.
 #
 # - id: fs-sandbox
 #   name: '@deepseek-ai/dsh-fs-sandbox'

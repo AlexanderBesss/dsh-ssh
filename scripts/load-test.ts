@@ -1,16 +1,9 @@
 /**
  * Load the plugin in a real cordis instance and prove the swap happened.
- *
- * This exists because the plugin was shipped once with imports that did not
- * resolve from a profile's node_modules. That failure mode is invisible: the
- * entry module throws, `apply()` never runs, and the plugin simply contributes
- * nothing. Nothing short of mounting it catches that, so this mounts it.
+ * Unresolvable imports make the entry throw and `apply()` silently never run
+ * — nothing short of mounting the plugin catches that, so this mounts it.
  *
  * Run:  node dist/scripts/load-test.js [host] [remoteRoot]
- *
- * It uses the live SSH host when reachable, so the assertions cover the whole
- * path — module graph, service registration, and a real remote operation
- * through the FileSystem class rather than through the transport directly.
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -36,8 +29,7 @@ function check(label: string, ok: boolean, detail: any = '') {
 	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`)
 }
 
-// The probe file is created by this script, and the fs contract has no delete,
-// so start from a known-absent state instead of inheriting the last run's.
+// fs contract has no delete: start from a known-absent probe, not last run's leftover
 const { spawnSync } = await import('node:child_process')
 spawnSync('ssh', ['-o', 'BatchMode=yes', host, `del /q "${remoteRoot}\\probe-load-test.txt"`], { stdio: 'ignore' })
 
@@ -51,9 +43,7 @@ const mounted = ctx.plugin(sshPlugin as any, {
 })
 
 try {
-	// `plugin()` returns a thenable that settles once the plugin has applied.
-	// A module whose imports do not resolve rejects here instead of failing
-	// silently, which is exactly the regression this script guards.
+	// plugin() settles once applied; unresolvable imports reject here — the guarded regression
 	await mounted
 } catch (error) {
 	console.error(`\nplugin failed to apply: ${(error as any)?.message ?? error}`)
@@ -67,8 +57,7 @@ check('ctx.subprocess is the SSH provider', ctx.subprocess?.constructor?.name ==
 check('fs.watch reports unsupported', typeof ctx.fs?.watch === 'function')
 check('sandboxMode is undefined (no confinement claimed)', ctx.fs?.sandboxMode === undefined, String(ctx.fs?.sandboxMode))
 
-// Exercise the FileSystem class itself, not the transport underneath it. This is
-// the layer every file tool actually calls.
+// exercise the FileSystem class itself — the layer every file tool calls
 try {
 	const target = await ctx.fs.resolve('probe-load-test.txt', {})
 	const before = await ctx.fs.stat(target)
@@ -103,7 +92,7 @@ try {
 	check('remote filesystem operations', false, (error as any)?.message ?? String(error))
 }
 
-// The subprocess contract: executable lookup happens on the remote host.
+// the subprocess contract: executable lookup happens on the remote host
 try {
 	const resolved = await ctx.subprocess.resolveExecutable('ping', {})
 	check('resolveExecutable finds a remote executable', typeof resolved === 'string' && resolved.length > 0, resolved)
@@ -120,7 +109,6 @@ try {
 	check('remote subprocess contract', false, (error as any)?.message ?? String(error))
 }
 
-// One real command through the subprocess provider.
 try {
 	const handle = ctx.subprocess.spawn({
 		argv: ['cmd', '/c', 'echo remote-ok && cd'],

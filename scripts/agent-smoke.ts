@@ -1,12 +1,6 @@
 /**
- * Local smoke test for the remote agent script.
- *
- * The agent is plain PowerShell with no SSH dependency in its request handling,
- * so it can be exercised against the local filesystem before any remote host is
- * involved. That separates "the agent logic is wrong" from "the SSH transport is
- * wrong" — the two failure modes that otherwise get confused at first contact.
- *
- * Usage: node dist/scripts/agent-smoke.js
+ * Smoke-test the agent script locally (no SSH): separates "agent logic wrong"
+ * from "transport wrong". Usage: node dist/scripts/agent-smoke.js
  */
 
 import { AGENT_SCRIPT } from '../src/agent-script.js'

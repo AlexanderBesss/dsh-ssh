@@ -1,19 +1,9 @@
 /**
- * The remote-side op script behind every file operation.
- *
- * It runs ONCE PER SSH INVOCATION, not as a resident process. Each invocation
- * carries one JSON request on stdin, closed immediately after (EOF is what makes
- * Windows OpenSSH deliver reliably — see the transport's header), and prints one
- * JSON response before exiting. The script itself is staged on the remote host
- * once per version: it rides stdin as base64 under a short bootstrap, because an
- * `-EncodedCommand` blob for it would exceed the remote command-line cap.
- *
- * Every operation returns a hashtable, or a hashtable carrying `__error` with a
- * `dsh-fs` error code, so failures arrive as data rather than as PowerShell
- * exception text.
- *
- * Written to run on Windows PowerShell 5.1 (always present on a Windows host):
- * no `??`, no ternary, no `&&`/`||`.
+ * The remote-side op script: runs ONCE PER SSH INVOCATION (one JSON request on
+ * stdin, EOF-closed — required for reliable Windows OpenSSH delivery — one JSON
+ * response out). Failures come back as a `__error` hashtable, not exception
+ * text. Written for Windows PowerShell 5.1: no `??`, no ternary, no `&&`/`||`.
+ * Editing the string array changes the pinned SHA-256 in the tests.
  *
  * @module dsh-ssh/agent-script
  */

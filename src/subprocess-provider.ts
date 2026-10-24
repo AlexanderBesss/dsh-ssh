@@ -1,21 +1,3 @@
-/**
- * SSH-backed `ctx.subprocess` provider.
- *
- * This is the seam that relocates the model-facing `pwsh` tool without touching
- * it: `dsh-pwsh-local` declares `inject = ["subprocess"]` and spawns through
- * `ctx.subprocess.spawn(...)`, so replacing this service moves every PowerShell
- * command to the remote machine while the executor keeps owning command
- * construction, output budgets, and the exit-marker format.
- *
- * Each command is one `ssh` invocation with real piped stdio, which is the only
- * shape the contract's raw-stream and exit-code requirements fit here. The
- * API catalog's unbuilt `ctx.ssh` seam describes the same shape DSH intends — a
- * verified remote helper plus "one authenticated stream through an independent
- * SSH channel" — and this provider is the shipped-today approximation of it.
- *
- * @module dsh-ssh/subprocess-provider
- */
-
 import type { Context } from '@deepseek-ai/cordis'
 import { existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -25,38 +7,23 @@ import { SubprocessExecutableNotFoundError, SubprocessRuntime } from './seams.js
 import type { SpawnHandle, SpawnOutcome, SpawnSpec, StdioMode, TerminalEnvironment } from './seams.js'
 import type { SshTransport } from './transport.js'
 
-/** Configuration this provider is constructed with. */
 export interface SshSubprocessConfig {
-	/** Remote working directory default, when a spawn omits `cwd`. */
 	cwd?: string
-	/** Shell hosting remote commands; informational on this transport. */
 	remoteShell?: string
-	/** Whether the packaged ripgrep is mapped onto a remote copy. */
 	mapRipgrep?: boolean
 }
 
-/** Upper bound on a terminate-escalation grace, matching the shared timer bound. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647
-/**
- * Binary payload per upload chunk.
- *
- * Measured against a real Windows host: a request body carried as stdin text is
- * relayed reliably up to about 128 KB of base64, and stalls with no output at
- * all beyond about 256 KB, because the remote default shell does not forward a
- * large stdin write to its child. 64 KB of binary is 88 KB of base64, which
- * sits inside the reliable range with margin.
- */
+/** 64 KB binary is 88 KB base64 — the largest stdin payload the remote shell relays reliably. */
 const UPLOAD_CHUNK_BYTES = 64 * 1024
-/** Windows executable suffixes tried when a command carries no extension. */
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
-/** A live command as tracked for teardown: both members must exist. */
 interface LiveEntry {
 	terminate(): void
 	waitForExit(signal?: AbortSignal): Promise<boolean>
 }
 
-/** Reject any string containing a NUL, which no spawn API can carry. */
+/** No spawn API can carry a NUL byte. */
 function assertNoNul(value: unknown, label: string): void {
 	if (typeof value === 'string' && value.includes('\0')) {
 		const error = new TypeError(`invalid ${label}: NUL bytes are not permitted`) as NodeJS.ErrnoException
@@ -65,12 +32,7 @@ function assertNoNul(value: unknown, label: string): void {
 	}
 }
 
-/**
- * A bounded in-memory tail with offset-based, non-consuming reads, matching the
- * collector shape the local provider exposes. No spill file is written, so
- * `spillPath` is simply absent; the contract treats that as a valid provider
- * choice as long as `lossy` and `nextOffset` stay truthful.
- */
+/** Bounded in-memory tail; absent `spillPath` is a valid provider choice while `lossy`/`nextOffset` stay truthful. */
 class OutputTail {
 	_chunks: Buffer[] = []
 	_bytes = 0
@@ -114,16 +76,12 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	_ripgrepPath?: string
 	_ripgrepPromise?: Promise<string>
 
-	/**
-	 * @param slot - the service name to occupy: `'subprocess'` to replace the
-	 * app's runtime outright, or a private name for route mode.
-	 */
+	/** `'subprocess'` takes the public name; a private name stays invisible (route mode). */
 	constructor(ctx: Context, config: SshSubprocessConfig, transport: SshTransport, slot = 'subprocess') {
 		super(ctx, slot)
 		this._config = config
 		this._transport = transport
-		// Teardown belongs to the composition, not to a method nobody calls:
-		// unloading the plugin must stop every remote command still running.
+		// Unloading the plugin must stop every remote command still running.
 		ctx.effect(() => async () => {
 			for (const entry of this._live) entry.terminate()
 			await Promise.all([...this._live].map((entry) => entry.waitForExit().catch(() => true)))
@@ -131,11 +89,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		}, 'dsh-ssh subprocess teardown')
 	}
 
-	/**
-	 * Look an executable up in the remote execution world, honouring the
-	 * caller's PATH layering and Windows PATHEXT, as the contract requires for
-	 * paths that must belong to the same world as the mounted filesystem.
-	 */
+	/** Lookup happens in the remote world, honouring the caller's PATH/PATHEXT. */
 	async resolveExecutable(command: unknown, env?: Record<string, string | undefined>, signal?: AbortSignal): Promise<string> {
 		signal?.throwIfAborted?.()
 		assertNoNul(command, 'executable')
@@ -159,52 +113,26 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return found.path
 	}
 
-	/** The remote world's shell facts, so consumers pick Windows conventions. */
 	async terminalEnvironment(signal?: AbortSignal): Promise<TerminalEnvironment> {
 		signal?.throwIfAborted?.()
 		const comspec = this._transport.system?.comspec
 		return {
 			platform: 'windows',
-			// The key is omitted rather than set to undefined: consumers fall
-			// back to `cmd.exe` only when the key is absent.
+			// consumers fall back to `cmd.exe` only when the key is absent
 			...(comspec ? { defaultShell: comspec } : {}),
 		}
 	}
 
-	/**
-	 * Interactive terminal sessions are not offered over this transport. A PTY
-	 * would need a remote pseudoconsole relay; refusing is the honest answer,
-	 * and the terminal UI stays unavailable instead of silently misbehaving.
-	 */
 	async spawnTerminal(): Promise<never> {
 		throw new Error('dsh-ssh: remote terminal sessions are not supported; use the pwsh tool for remote commands')
 	}
 
-	/**
-	 * Recognize the ripgrep binary the harness packages locally.
-	 *
-	 * `dsh-tool-fs-search` resolves its own bundled ripgrep and hands that
-	 * absolute local path to `ctx.subprocess` as argv[0]. It does not exist on
-	 * the remote host, so the provider maps it onto a remote copy it ships
-	 * itself: the search tools stay untouched and no remote install is needed.
-	 */
 	_isPackagedRipgrep(program: string): boolean {
 		if (this._config.mapRipgrep === false) return false
 		return /[\\/]@vscode[\\/]ripgrep/i.test(program) || /^(?:rg|rg\.exe)$/i.test(basename(program))
 	}
 
-	/**
-	 * Upload the locally packaged rg.exe once, then reuse the remote copy.
-	 *
-	 * Each chunk is written to its own numbered part file rather than appended
-	 * to one growing file. That makes a chunk idempotent, so a stalled request
-	 * can be retried without duplicating bytes — the failure mode an append
-	 * based upload cannot recover from. The parts are then concatenated
-	 * remotely and the result is verified by SHA-256 before it moves into
-	 * place. A 5 MB binary over an intermittently stalling channel is exactly
-	 * the thing that half-completes, and a truncated `rg.exe` would look like a
-	 * search bug rather than a transport one.
-	 */
+	/** Each chunk goes to its own numbered part file (retry-safe), then concat + SHA-256 verify before moving into place. */
 	async _ensureRemoteRipgrep(localProgram: string): Promise<string> {
 		if (this._ripgrepPath) return this._ripgrepPath
 		this._ripgrepPromise ??= (async () => {
@@ -218,11 +146,8 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			const buffer = readFileSync(localProgram)
 			const expected = createHash('sha256').update(buffer).digest('hex')
 
-			// Reuse a copy an earlier session already shipped. The check costs two
-			// round trips (~1 s); the upload costs 5 MB over a channel that
-			// intermittently stalls — measured at 408 s for one session start.
-			// Identity is the SHA-256, so a remote build of a different ripgrep
-			// version is not mistaken for a match.
+			// Reuse a copy an earlier session shipped: two round trips beat a 5 MB
+			// upload over a stalling channel; SHA-256 proves it is the same build.
 			const present = await this._transport.request('stat', { path: remote })
 			if (present.exists && present.type === 'file') {
 				const digest = await this._transport.request('hash', { path: remote }, { timeoutMs: 60000 })
@@ -282,14 +207,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return this._ripgrepPromise
 	}
 
-	/**
-	 * Resolve argv[0] without awaiting.
-	 *
-	 * `spawn` must hand back a live handle synchronously, so the upload cannot
-	 * happen on this path. Before it lands the search tools run against a remote
-	 * `rg` on PATH; {@link warm} pre-ships the binary at startup so that
-	 * fallback is rarely what actually runs.
-	 */
+	/** Synchronous: `spawn` returns a handle without awaiting; until the upload lands, search runs against remote `rg` on PATH. */
 	_resolveProgram(program: string): string {
 		if (!this._isPackagedRipgrep(program)) return program
 		if (this._ripgrepPath) return this._ripgrepPath
@@ -297,10 +215,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return 'rg'
 	}
 
-	/**
-	 * Ship the packaged ripgrep to the remote host, called at startup so the
-	 * first `glob` / `grep` already runs against the mapped binary.
-	 */
 	async warm(localProgram?: string): Promise<void> {
 		if (this._config.mapRipgrep === false || !localProgram) return
 		await this._ensureRemoteRipgrep(localProgram)
@@ -329,49 +243,22 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	}
 
 	/**
-	 * Build the remote command line.
-	 *
-	 * Two parsers stand between this plugin and the remote program, and both
-	 * mangle conventional quoting: `cmd.exe` (the remote default shell) toggles
-	 * quotes naively, so an element like `a"&calc` escapes its escaping and the
-	 * `&calc` executes; and PowerShell 5.1's own argv rewrite for native
-	 * commands corrupts embedded quotes even when `cmd.exe` never sees them.
-	 * So neither shell ever parses user-influenced text. The invocation is one
-	 * PowerShell script that starts the process through .NET directly —
-	 * `ProcessStartInfo` with `FileName`, a hand-built MSVCRT-quoted
-	 * `Arguments` line (the same scheme libuv uses locally; .NET's
-	 * `ArgumentList` is absent on older framework installs), `WorkingDirectory`
-	 * and per-process `EnvironmentVariables`, output handles inherited from the
-	 * ssh channel — and that script crosses the wire as a base64
-	 * `-EncodedCommand` payload whose alphabet contains no shell metacharacter
-	 * at all.
-	 *
-	 * Costs, stated honestly: the payload inflates the script about 2.7×
-	 * inside the (8191-char) remote command line, so very long single commands
-	 * can hit the limit sooner than a raw scheme; and the .NET-framework
-	 * semantics apply (Windows 10 ships it everywhere).
-	 *
-	 * Only the request's explicit `env` layers on top of the remote's own
-	 * environment: the local parent environment belongs to a different machine
-	 * and is deliberately not forwarded.
+	 * Neither `cmd.exe` nor PowerShell 5.1 may parse user-influenced text — both
+	 * mangle quotes (`a"&calc` would execute). The launch is one PowerShell
+	 * script starting the process via .NET `ProcessStartInfo`, crossing the wire
+	 * as base64 `-EncodedCommand`. Only the request's explicit `env` layers on
+	 * the remote environment; the local parent environment belongs to another machine.
 	 */
 	_remoteCommand(spec: SpawnSpec): string {
 		const argv = [...spec.argv]
 		argv[0] = this._resolveProgram(String(argv[0]))
-		// A PowerShell single-quoted literal: no interpolation, and the only
-		// escape is doubling the quote itself. Values carrying newlines are
-		// re-materialized at runtime from base64 instead — a raw newline inside
-		// a `; `-joined statement list would end the statement, and a
-		// here-string's `'@` terminator can be forged by the value's own
-		// content; the base64 alphabet contains neither quotes nor newlines.
+		// single-quoted PS literal, quotes doubled; newline-carrying values ride
+		// base64 — a here-string terminator could otherwise be forged by the value
 		const q = (value: string): string =>
 			value.includes('\n') || value.includes('\r')
 				? `([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(value, 'utf8').toString('base64')}')))`
 				: `'${value.replace(/'/g, "''")}'`
-		// The MSVCRT command-line quoting, i.e. the exact scheme Node's own
-		// spawner (libuv) uses locally and .NET's ArgumentList builds when the
-		// property exists — it is absent on older .NET Framework installs, so
-		// the line is composed here and handed over whole.
+		// MSVCRT quoting — libuv's scheme; .NET's ArgumentList is absent on older Frameworks
 		const msvcQuote = (value: string): string => {
 			if (value === '') return '""'
 			let out = '"'
@@ -392,8 +279,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		}
 		const statements: string[] = [
 			"$ErrorActionPreference = 'Stop'",
-			// Progress records arrive as CLIXML on stderr otherwise, which the
-			// contract would hand back as the command's own stderr.
+			// Progress records would otherwise arrive as CLIXML on stderr and look like the command's own output
 			"$ProgressPreference = 'SilentlyContinue'",
 			'$si = New-Object Diagnostics.ProcessStartInfo',
 			// Must precede EnvironmentVariables access: setting that map while
@@ -414,7 +300,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`
 	}
 
-	/** Spawn one remote command and bind it to the contract's handle shape. */
 	spawn(spec: SpawnSpec): SpawnHandle {
 		this._validate(spec)
 		const stdio = spec.stdio ?? {}
@@ -432,8 +317,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 				return
 			}
 			if (mode === 'inherit') {
-				// The harness host has no interactive console to inherit, so the
-				// nearest honest equivalent is this process's own stream.
+				// no interactive console on this host; our own stream is the honest equivalent
 				stream.pipe(name === 'stdout' ? process.stdout : process.stderr)
 				return
 			}
@@ -456,8 +340,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			terminate() {
 				if (terminated) return
 				terminated = true
-				// Closing the SSH channel is the graceful tier; the local client
-				// is then forced off if the remote side has not settled.
+				// closing the ssh channel is the graceful tier; SIGKILL is the forced one
 				child.kill()
 				const timer = setTimeout(() => {
 					try {
@@ -472,8 +355,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		}
 		this._live.add(entry)
 
-		// Detach the caller's abort listener once the command settles, so a
-		// long-lived signal does not accumulate listeners across spawns.
+		// detach after settle: a long-lived signal must not accumulate listeners across spawns
 		let detachSignalAbort = (): void => {}
 		if (spec.signal) {
 			const onAbort = (): void => entry.terminate()
@@ -487,9 +369,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 				detachSignalAbort()
 				if (settled) return
 				settled = true
-				// ssh propagates the remote exit status, so a numeric code is a
-				// real remote outcome; a null code with no signal is a transport
-				// failure and the contract wants that rejected, not resolved.
+				// numeric code = a real remote exit; null code + null signal = transport failure, reject
 				if (code === null && signal === null) {
 					reject(new Error(`dsh-ssh: remote command did not run to completion on ${this._transport.host}`))
 					return
@@ -505,15 +385,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			})
 		})
 
-		/**
-		 * Resolve true once the remote command's own exit is observed.
-		 *
-		 * ssh carries the direct command's exit status, so that part is
-		 * proven. Descendants the command spawned remotely are NOT proven
-		 * quiescent — there is no remote process-range owner over this
-		 * transport — so this is weaker than the local provider's managed
-		 * range and is documented as such rather than passed off as equal.
-		 */
+		/** True once the direct command's exit is observed; remote descendants are NOT proven quiescent — weaker than the local provider's managed range. */
 		function waitForExit(signal?: AbortSignal): Promise<boolean> {
 			if (signal?.aborted) return Promise.resolve(false)
 			return new Promise((resolve) => {
@@ -536,8 +408,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			stdin: streams.stdin,
 			stdout: streams.stdout,
 			stderr: streams.stderr,
-			// Always present: the contract exposes the key even when no control
-			// channel was requested, and consumers read it unconditionally.
+			// key always present; consumers read it unconditionally
 			control: undefined,
 			collected: collectors,
 			done,

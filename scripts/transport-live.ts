@@ -1,9 +1,5 @@
 /**
- * Live transport check against a real SSH host.
- *
- * Runs the same code path the plugin uses — persistent agent, JSON ops, and a
- * per-command ssh spawn — without needing DSH installed.
- *
+ * Live transport check against a real SSH host, no DSH needed.
  * Usage: node dist/scripts/transport-live.js <host> [remoteRoot]
  */
 
@@ -60,7 +56,7 @@ await step('list scratch', () => transport.request('list', { path: scratch }))
 await step('where ping', () => transport.request('where', { name: 'ping' }))
 await step('where node via PATH', () => transport.request('where', { name: 'node', path: process.env.PATH, pathExt: '.COM;.EXE;.BAT;.CMD' }))
 
-// Per-command ssh: the subprocess provider's path.
+// per-command ssh: the subprocess provider's path
 const runCommand = (line: string) => new Promise<any>((resolve) => {
 	const child = transport.spawnCommand(line)
 	let stdout = ''
