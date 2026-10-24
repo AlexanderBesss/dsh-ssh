@@ -1,0 +1,120 @@
+/**
+ * Windows path semantics for the remote execution world.
+ *
+ * The remote host is a Windows PC, so the provider cannot borrow POSIX rules:
+ * `\` is the separator, `D:\x` and `\\server\share` are absolute, and the
+ * filesystem is case-insensitive. Target identity therefore keys on a
+ * case-folded normalized path while `displayPath` keeps the caller's spelling.
+ *
+ * @module dsh-ssh/remote-path
+ */
+
+/** Matches `C:\`, `C:/`, and UNC `\\server\share`. */
+const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|\\[\\/][^\\/])/
+/** Matches a Windows drive specifier with no separator, e.g. `C:work`. */
+const DRIVE_RELATIVE = /^[a-zA-Z]:/
+
+/**
+ * Whether a path is absolute in the remote (Windows) execution world.
+ * @param path - the path to classify.
+ * @returns true for drive-rooted and UNC paths.
+ */
+export function isAbsolute(path: string): boolean {
+	return ABSOLUTE.test(path)
+}
+
+/**
+ * Fold separators and collapse `.` / `..` segments without touching case.
+ *
+ * A drive-relative path (`C:work`) is rejected rather than guessed at, matching
+ * the workspace registry's own stance on that form.
+ *
+ * @param path - an absolute remote path.
+ * @returns the normalized path, without a trailing separator.
+ * @throws when the path is not absolute.
+ */
+export function normalize(path: string): string {
+	if (!isAbsolute(path)) throw new Error(`dsh-ssh: not an absolute remote path: ${path}`)
+	if (DRIVE_RELATIVE.test(path) && !ABSOLUTE.test(path)) {
+		throw new Error(`dsh-ssh: drive-relative remote paths are not supported: ${path}`)
+	}
+	const unc = path.startsWith('\\')
+	// Preserve the UNC prefix (`\\server\share`) and normalize the remainder.
+	const prefix = unc ? '\\\\' : ''
+	const body = unc ? path.slice(2).replace(/\\/g, '/') : path.replace(/\\/g, '/')
+	const segments = body.split('/')
+	// The UNC share root — server plus share, the two segments below the
+	// prefix — is protected from `..` the way a drive root is: `\\srv\share\..\..`
+	// stays at the share instead of popping into a malformed single-backslash
+	// path that Windows would re-read as drive-relative.
+	const protectedSegments = unc ? 2 : 0
+	const out: string[] = []
+	for (const segment of segments) {
+		if (segment === '' || segment === '.') continue
+		if (segment === '..') {
+			if (out.length > protectedSegments && out[out.length - 1] !== '..') out.pop()
+			continue
+		}
+		out.push(segment)
+	}
+	if (unc) return `${prefix}${out.join('\\')}`
+	const joined = out.join('\\')
+	// A bare drive root keeps its separator: `C:` alone is not a usable path.
+	return joined.length === 2 && joined[1] === ':' ? `${joined}\\` : joined
+}
+
+/**
+ * Resolve a possibly relative path against the remote workspace root.
+ * @param cwd - absolute remote directory the call resolves from.
+ * @param path - absolute, or relative to `cwd`.
+ * @returns the normalized absolute remote path.
+ */
+export function resolvePath(cwd: string, path: unknown): string {
+	const value = String(path ?? '')
+	if (value.trim().length === 0) return normalize(cwd)
+	if (isAbsolute(value)) return normalize(value)
+	const base = normalize(cwd).replace(/\\+$/, '')
+	return normalize(`${base}\\${value}`)
+}
+
+/**
+ * The stable identity key for a remote path: case-folded, because NTFS lookups
+ * are case-insensitive and the same file reached as `D:\Src\a.ts` or
+ * `D:\src\A.TS` must share one stale-version guard.
+ * @param path - an absolute remote path.
+ * @returns the case-folded normalized path.
+ */
+export function targetKey(path: string): string {
+	return normalize(path).toLowerCase()
+}
+
+/**
+ * Whether `child` is `parent` itself or lives beneath it.
+ * @param parent - candidate containing directory (already normalized).
+ * @param child - candidate path (already normalized).
+ * @returns true when containment holds, comparing case-insensitively.
+ */
+export function contains(parent: string, child: string): boolean {
+	const p = normalize(parent).toLowerCase().replace(/\\+$/, '')
+	const c = normalize(child).toLowerCase().replace(/\\+$/, '')
+	return c === p || c.startsWith(`${p}\\`)
+}
+
+/**
+ * The final path segment, for display and titles.
+ * @param path - an absolute remote path.
+ * @returns the last segment.
+ */
+export function basename(path: string): string {
+	return normalize(path).replace(/\\+$/, '').split('\\').pop() ?? ''
+}
+
+/**
+ * Join a directory with one child name.
+ * @param dir - absolute remote directory.
+ * @param name - child entry name.
+ * @returns the normalized child path.
+ */
+export function joinDir(dir: string, name: string): string {
+	return normalize(`${normalize(dir).replace(/\\+$/, '')}\\${name}`)
+}

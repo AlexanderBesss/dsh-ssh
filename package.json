@@ -1,0 +1,73 @@
+{
+  "name": "dsh-ssh",
+  "version": "0.1.0",
+  "description": "SSH-backed filesystem and subprocess providers for DeepSeek Harness: open and work a project that lives on a remote PC, with read/write/edit/glob/grep/pwsh all executing there.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./replace": {
+      "types": "./dist/src/replace.d.ts",
+      "default": "./dist/src/replace.js"
+    },
+    "./client": {
+      "default": "./dist/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && tsdown",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "ssh",
+    "remote",
+    "filesystem",
+    "subprocess"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "platform": "web"
+    },
+    "manifestVersion": 1
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/schemastery": "3.18.4",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.1",
+    "tsdown": "^0.23.1",
+    "typescript": "^7.0.2"
+  }
+}
