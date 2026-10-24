@@ -11,11 +11,11 @@
 
 /** Matches `C:\`, `C:/`, and UNC `\\server\share`. */
 const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|\\[\\/][^\\/])/
-/** Matches a Windows drive specifier with no separator, e.g. `C:work`. */
-const DRIVE_RELATIVE = /^[a-zA-Z]:/
 
 /**
  * Whether a path is absolute in the remote (Windows) execution world.
+ * Drive-relative forms (`C:work`) are not absolute and normalize rejects them
+ * through this guard, matching the workspace registry's own stance on that form.
  * @param path - the path to classify.
  * @returns true for drive-rooted and UNC paths.
  */
@@ -26,18 +26,12 @@ export function isAbsolute(path: string): boolean {
 /**
  * Fold separators and collapse `.` / `..` segments without touching case.
  *
- * A drive-relative path (`C:work`) is rejected rather than guessed at, matching
- * the workspace registry's own stance on that form.
- *
  * @param path - an absolute remote path.
  * @returns the normalized path, without a trailing separator.
  * @throws when the path is not absolute.
  */
 export function normalize(path: string): string {
 	if (!isAbsolute(path)) throw new Error(`dsh-ssh: not an absolute remote path: ${path}`)
-	if (DRIVE_RELATIVE.test(path) && !ABSOLUTE.test(path)) {
-		throw new Error(`dsh-ssh: drive-relative remote paths are not supported: ${path}`)
-	}
 	const unc = path.startsWith('\\')
 	// Preserve the UNC prefix (`\\server\share`) and normalize the remainder.
 	const prefix = unc ? '\\\\' : ''
@@ -98,15 +92,6 @@ export function contains(parent: string, child: string): boolean {
 	const p = normalize(parent).toLowerCase().replace(/\\+$/, '')
 	const c = normalize(child).toLowerCase().replace(/\\+$/, '')
 	return c === p || c.startsWith(`${p}\\`)
-}
-
-/**
- * The final path segment, for display and titles.
- * @param path - an absolute remote path.
- * @returns the last segment.
- */
-export function basename(path: string): string {
-	return normalize(path).replace(/\\+$/, '').split('\\').pop() ?? ''
 }
 
 /**

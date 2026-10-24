@@ -50,15 +50,7 @@ const UPLOAD_CHUNK_BYTES = 64 * 1024
 /** Windows executable suffixes tried when a command carries no extension. */
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
-/**
- * A live command as tracked for teardown.
- *
- * NOTE (fixed while typing): the pre-TypeScript entry object only carried
- * `terminate`, while the teardown effect also awaited `waitForExit` — unloading
- * the plugin with live commands threw a TypeError there. Both members are part
- * of the tracked entry from the start now; nothing else about the tracking
- * changed.
- */
+/** A live command as tracked for teardown: both members must exist. */
 interface LiveEntry {
 	terminate(): void
 	waitForExit(signal?: AbortSignal): Promise<boolean>
@@ -85,9 +77,6 @@ class OutputTail {
 	_total = 0
 	_maxBytes: number
 
-	/**
-	 * @param maxBytes - retained tail size; defaults to 256 KiB when not finite.
-	 */
 	constructor(maxBytes?: number) {
 		this._maxBytes = Number.isFinite(maxBytes) && (maxBytes as number) > 0 ? (maxBytes as number) : 256 * 1024
 	}
@@ -152,13 +141,9 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	 */
 	async resolveExecutable(command: unknown, env?: Record<string, string | undefined>, signal?: AbortSignal): Promise<string> {
 		signal?.throwIfAborted?.()
+		assertNoNul(command, 'executable')
 		const name = String(command ?? '')
 		if (name.length === 0) throw new Error('dsh-ssh: executable must be non-empty')
-		if (name.includes('\0')) {
-			const error = new TypeError('invalid executable: NUL bytes are not permitted') as NodeJS.ErrnoException
-			error.code = 'ERR_INVALID_ARG_VALUE'
-			throw error
-		}
 		if (isAbsolute(name)) {
 			const info = await this._transport.request('stat', { path: name })
 			if (info.exists && info.type === 'file') return name
@@ -194,7 +179,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	 * would need a remote pseudoconsole relay; refusing is the honest answer,
 	 * and the terminal UI stays unavailable instead of silently misbehaving.
 	 */
-	async spawnTerminal(spec: SpawnSpec): Promise<never> {
+	async spawnTerminal(): Promise<never> {
 		throw new Error('dsh-ssh: remote terminal sessions are not supported; use the pwsh tool for remote commands')
 	}
 

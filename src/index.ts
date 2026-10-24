@@ -220,23 +220,8 @@ function bootTrace(message: string): void {
 	} catch {}
 }
 
-/**
- * The shared body of both entries. `config.mode` decides the shape: route
- * mode (this module's entry) borrows the app's providers and routes by path;
- * replace mode ( {@link ./replace.ts} ) arrives with `mode` already forced.
- * `allowReplace` marks the replace entry: the route-mode entry must never
- * take the public names, because its own gate is waiting for exactly the
- * providers replace mode withdraws — the fiber would hang pending and the
- * app would lose its filesystem. A `mode: replace` config that arrives
- * through the wrong entry downgrades to route with a warning instead.
- */
-export function applyModule(ctx: Context, config: SshConfig, allowReplace = false): void {
-	bootTrace(`apply start (mode=${config.mode}) fs=${!!ctx.get?.('fs', false)} subprocess=${!!ctx.get?.('subprocess', false)} webServer=${!!ctx.get?.('webServer', false)}`)
-	if (!isAbsolute(config.remoteRoot)) {
-		ctx.logger.error(`dsh-ssh: remoteRoot must be an absolute remote path, got "${config.remoteRoot}"`)
-		return
-	}
-
+/** The mode this mount will run: a misrequested `replace` downgrades to route. */
+function resolveMode(ctx: Context, config: SshConfig, allowReplace: boolean): string {
 	let mode = config.mode
 	if (mode === 'replace' && !allowReplace) {
 		ctx.logger.warn('dsh-ssh: mode "replace" requested through the route-mode entry, whose inject gate waits for the very providers replace mode withdraws — staying in route mode. Mount "dsh-ssh/replace" for the remote-only shape.')
@@ -246,66 +231,42 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 		ctx.logger.warn(`dsh-ssh: unknown mode "${mode}", using "route"`)
 		mode = 'route'
 	}
+	return mode
+}
 
-	const transport = new SshTransport({
-		host: config.host,
-		sshBin: config.sshBin,
-		sshArgs: config.sshArgs,
-		remoteShell: config.remoteShell,
-		connectTimeoutMs: config.connectTimeoutMs,
-		requestTimeoutMs: config.requestTimeoutMs,
+/**
+ * Publish the routers for the private SSH providers so consumer fibers see
+ * them under `fs` / `subprocess`. The raw instance behind each service proxy
+ * is what the router forwards to: cordis binds method receivers to a proxy,
+ * and the router must call the implementation itself.
+ */
+function publishRouters(
+	ctx: Context,
+	config: SshConfig,
+	localFs: any,
+	localSubprocess: any,
+	filesystem: SshFileSystem,
+	subprocess: SshSubprocessRuntime,
+	remoteRoots: () => string[],
+): void {
+	const raw = (service: any) => service?.[symbols.original] ?? service
+	const fsRouter = createFsRouter({
+		local: raw(localFs),
+		remote: filesystem,
+		remoteRoots,
 	})
+	const subprocessRouter = createSubprocessRouter({
+		local: raw(localSubprocess),
+		remote: subprocess,
+		remoteRoots,
+		defaultSide: config.defaultSide,
+	})
+	installRouting(ctx, { fs: fsRouter, subprocess: subprocessRouter })
+	ctx.logger.info(`dsh-ssh: routing ${config.remoteRoot} to ${config.host}; all other paths stay on this machine`)
+}
 
-	// Unloading the plugin must not leave a remote PowerShell running.
-	ctx.effect(() => () => {
-		transport.close()
-	}, 'dsh-ssh: remote agent lifecycle')
-
-	// Paths the picker has prepared join the routing set as additional remote
-	// roots, so a workspace opened anywhere on the remote PC is served over
-	// SSH by the sessions that use it — and the set survives restarts.
-	const workspaceRoots = createWorkspaceRootStore(config.host)
-	const remoteRoots = () => [config.remoteRoot, ...workspaceRoots.roots()]
-
-	// In route mode the SSH providers register under private names, invisible to
-	// consumers, and a router publishes them as `fs` / `subprocess`. Under
-	// 'replace' they occupy the names themselves, which is why that mode needs
-	// the local providers disabled by the profile patch.
-	const localFs = mode === 'replace' ? undefined : ctx.get?.('fs', false)
-	const localSubprocess = mode === 'replace' ? undefined : ctx.get?.('subprocess', false)
-	const route = mode !== 'replace' && !!localFs && !!localSubprocess
-	bootTrace(`routing decision: route=${route}`)
-	if (mode !== 'replace' && !route) {
-		ctx.logger.error('dsh-ssh: route mode did not find the app\'s fs and subprocess providers; refusing to register anything under the public names (that fallback clashed with the real providers at a cold start and failed the fiber). Through the route-mode entry the inject gate should make this state unreachable; if you are seeing it, this row was mounted through dsh-ssh/replace or with a patched inject list while the local providers were left in place.')
-	}
-
-	// Only 'replace' mode (where the patch has withdrawn the local providers)
-	// may take the public names; everything else stays under private names so
-	// a name clash can never fail the fiber or hijack the app.
-	const filesystem = new SshFileSystem(ctx, { cwd: config.remoteRoot }, transport, mode === 'replace' ? 'fs' : 'ssh-fs')
-	const subprocess = new SshSubprocessRuntime(ctx, { mapRipgrep: config.mapRipgrep }, transport, mode === 'replace' ? 'subprocess' : 'ssh-subprocess')
-
-	if (route) {
-		// The raw instance behind each service proxy: cordis binds method receivers
-		// to a proxy, and the router must call the implementation itself.
-		const raw = (service: any) => service?.[symbols.original] ?? service
-		const fsRouter = createFsRouter({
-			local: raw(localFs),
-			remote: filesystem,
-			remoteRoots,
-		})
-		const subprocessRouter = createSubprocessRouter({
-			local: raw(localSubprocess),
-			remote: subprocess,
-			remoteRoots,
-			defaultSide: config.defaultSide,
-		})
-		installRouting(ctx, { fs: fsRouter, subprocess: subprocessRouter })
-		ctx.logger.info(`dsh-ssh: routing ${config.remoteRoot} to ${config.host}; all other paths stay on this machine`)
-	}
-
-	// Bring the channel up and pre-ship ripgrep off the critical path, so the
-	// first tool call does not pay for agent startup plus a 5 MB upload.
+/** Bring the channel up and pre-ship ripgrep off the critical path. */
+function connectAndWarm(ctx: Context, config: SshConfig, transport: SshTransport, subprocess: SshSubprocessRuntime): void {
 	void (async () => {
 		await transport.connect()
 		const facts = transport.system
@@ -314,25 +275,25 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	})().catch((error) => {
 		ctx.logger.error(`dsh-ssh: could not reach ${config.host}: ${error?.message ?? error}`)
 	})
+}
 
-	void registerStatusTool(ctx, config, transport, filesystem).catch((error) => {
-		ctx.logger.warn?.(`dsh-ssh: ssh_status tool not registered: ${error?.message ?? error}`)
-	})
-
-	// The remote-workspace picker's host half (browser half: src/client,
-	// served through the './client' export). Through the route-mode entry the
-	// `webServer` gate guarantees it is present when `apply` runs, so the
-	// inject callback fires at once; through the replace entry
-	// (`dsh-ssh/replace`, gate `['tools']`) this same block waits for a web
-	// server or leaves the picker routes down in a headless composition.
-	//
-	// The retry timer below is not decoration. Observed against the shipped
-	// 0.2 composition, a cold start could leave the inject callback unfired
-	// even with the service already registered — while a mid-session re-mount
-	// of the same row worked from the identical code. `ctx.get` deliberately
-	// bypasses the inject gate — exactly how route mode reads `fs` — so a few
-	// seconds of polling covers the boot window without holding the fiber
-	// hostage when no web server exists.
+/**
+ * The remote-workspace picker's host half (browser half: src/client,
+ * served through the './client' export). Through the route-mode entry the
+ * `webServer` gate guarantees it is present when `apply` runs, so the
+ * inject callback fires at once; through the replace entry
+ * (`dsh-ssh/replace`, gate `['tools']`) this same block waits for a web
+ * server or leaves the picker routes down in a headless composition.
+ *
+ * The retry timer below is not decoration. Observed against the shipped
+ * 0.2 composition, a cold start could leave the inject callback unfired
+ * even with the service already registered — while a mid-session re-mount
+ * of the same row worked from the identical code. `ctx.get` deliberately
+ * bypasses the inject gate — exactly how route mode reads `fs` — so a few
+ * seconds of polling covers the boot window without holding the fiber
+ * hostage when no web server exists.
+ */
+function bringUpWorkspacePicker(ctx: Context, config: SshConfig, transport: SshTransport, workspaceRoots: ReturnType<typeof createWorkspaceRootStore>): void {
 	let routesUp = false
 	const bringUpRoutes = (webServer: any, via: string): void => {
 		if (routesUp || !webServer) return
@@ -373,6 +334,74 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	}, 3000)
 	timer.unref?.()
 	ctx.effect(() => () => clearInterval(timer), 'dsh-ssh: picker route bring-up timer')
+}
+
+/**
+ * The shared body of both entries. `config.mode` decides the shape: route
+ * mode (this module's entry) borrows the app's providers and routes by path;
+ * replace mode ( {@link ./replace.ts} ) arrives with `mode` already forced.
+ * `allowReplace` marks the replace entry: the route-mode entry must never
+ * take the public names, because its own gate is waiting for exactly the
+ * providers replace mode withdraws — the fiber would hang pending and the
+ * app would lose its filesystem. A `mode: replace` config that arrives
+ * through the wrong entry downgrades to route with a warning instead.
+ */
+export function applyModule(ctx: Context, config: SshConfig, allowReplace = false): void {
+	bootTrace(`apply start (mode=${config.mode}) fs=${!!ctx.get?.('fs', false)} subprocess=${!!ctx.get?.('subprocess', false)} webServer=${!!ctx.get?.('webServer', false)}`)
+	if (!isAbsolute(config.remoteRoot)) {
+		ctx.logger.error(`dsh-ssh: remoteRoot must be an absolute remote path, got "${config.remoteRoot}"`)
+		return
+	}
+
+	const mode = resolveMode(ctx, config, allowReplace)
+
+	const transport = new SshTransport({
+		host: config.host,
+		sshBin: config.sshBin,
+		sshArgs: config.sshArgs,
+		remoteShell: config.remoteShell,
+		connectTimeoutMs: config.connectTimeoutMs,
+		requestTimeoutMs: config.requestTimeoutMs,
+	})
+
+	// Unloading the plugin must not leave a remote PowerShell running.
+	ctx.effect(() => () => {
+		transport.close()
+	}, 'dsh-ssh: remote agent lifecycle')
+
+	// Paths the picker has prepared join the routing set as additional remote
+	// roots, so a workspace opened anywhere on the remote PC is served over
+	// SSH by the sessions that use it — and the set survives restarts.
+	const workspaceRoots = createWorkspaceRootStore(config.host)
+	const remoteRoots = () => [config.remoteRoot, ...workspaceRoots.roots()]
+
+	// In route mode the SSH providers register under private names, invisible to
+	// consumers, and a router publishes them as `fs` / `subprocess`. Under
+	// 'replace' they occupy the names themselves, which is why that mode needs
+	// the local providers disabled by the profile patch.
+	const localFs = mode === 'replace' ? undefined : ctx.get?.('fs', false)
+	const localSubprocess = mode === 'replace' ? undefined : ctx.get?.('subprocess', false)
+	const route = mode !== 'replace' && !!localFs && !!localSubprocess
+	bootTrace(`routing decision: route=${route}`)
+	if (mode !== 'replace' && !route) {
+		ctx.logger.error('dsh-ssh: route mode did not find the app\'s fs and subprocess providers; refusing to register anything under the public names (that fallback clashed with the real providers at a cold start and failed the fiber). Through the route-mode entry the inject gate should make this state unreachable; if you are seeing it, this row was mounted through dsh-ssh/replace or with a patched inject list while the local providers were left in place.')
+	}
+
+	// Only 'replace' mode (where the patch has withdrawn the local providers)
+	// may take the public names; everything else stays under private names so
+	// a name clash can never fail the fiber or hijack the app.
+	const filesystem = new SshFileSystem(ctx, { cwd: config.remoteRoot }, transport, mode === 'replace' ? 'fs' : 'ssh-fs')
+	const subprocess = new SshSubprocessRuntime(ctx, { mapRipgrep: config.mapRipgrep }, transport, mode === 'replace' ? 'subprocess' : 'ssh-subprocess')
+
+	if (route) publishRouters(ctx, config, localFs, localSubprocess, filesystem, subprocess, remoteRoots)
+
+	connectAndWarm(ctx, config, transport, subprocess)
+
+	void registerStatusTool(ctx, config, transport, filesystem).catch((error) => {
+		ctx.logger.warn?.(`dsh-ssh: ssh_status tool not registered: ${error?.message ?? error}`)
+	})
+
+	bringUpWorkspacePicker(ctx, config, transport, workspaceRoots)
 }
 
 /**

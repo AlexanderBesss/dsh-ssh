@@ -49,6 +49,8 @@ type LineEndings = 'CRLF' | 'LF'
 const BINARY_SAMPLE_BYTES = 8192
 /** Default cap on the content snapshot returned alongside a write, for diffs. */
 const DEFAULT_DIFF_BASIS_MAX_BYTES = 10 * 1024 * 1024
+/** Byte window of the incremental decode in `streamText`. */
+const TEXT_CHUNK_BYTES = 64 * 1024
 
 /**
  * Translate a transport or agent failure into the `dsh-fs` error taxonomy.
@@ -214,11 +216,36 @@ export class SshFileSystem extends FileSystem {
 		}
 	}
 
-	/** Decode remote bytes as UTF-8, rejecting binaries the way the local backend does. */
-	_decodeText(buffer: Buffer, displayPath: string, verb: string): string {
+	/** Reject bytes that start with a NUL, the way the local backend refuses binaries. */
+	_assertNotBinary(buffer: Buffer, displayPath: string, verb: string): void {
 		if (buffer.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
 			throw new FsError(`cannot ${verb} "${displayPath}": binary file`, 'FS_NOT_TEXT')
 		}
+	}
+
+	/** One agent `read` call returned as bytes, mapped into the fs error taxonomy. */
+	async _readRaw(displayPath: string, verb: string): Promise<Buffer> {
+		let response: AgentResult
+		try {
+			response = await this._transport.request('read', { path: displayPath })
+		} catch (error) {
+			throw toFsError(error, displayPath, verb)
+		}
+		return Buffer.from(response.base64, 'base64')
+	}
+
+	/** One agent `stat` call, mapped into the fs error taxonomy. */
+	async _statRaw(displayPath: string, verb: string): Promise<AgentResult> {
+		try {
+			return await this._transport.request('stat', { path: displayPath })
+		} catch (error) {
+			throw toFsError(error, displayPath, verb)
+		}
+	}
+
+	/** Decode remote bytes as UTF-8, rejecting binaries the way the local backend does. */
+	_decodeText(buffer: Buffer, displayPath: string, verb: string): string {
+		this._assertNotBinary(buffer, displayPath, verb)
 		try {
 			return new TextDecoder('utf-8', { fatal: true }).decode(buffer)
 		} catch {
@@ -229,32 +256,19 @@ export class SshFileSystem extends FileSystem {
 	async readText(target: FsTarget, signal?: AbortSignal): Promise<string> {
 		this._aborted(signal, 'read')
 		const displayPath = this._pathOf(target)
-		let response: AgentResult
-		try {
-			response = await this._transport.request('read', { path: displayPath })
-		} catch (error) {
-			throw toFsError(error, displayPath, 'read')
-		}
+		const buffer = await this._readRaw(displayPath, 'read')
 		this._aborted(signal, 'read')
-		return this._decodeText(Buffer.from(response.base64, 'base64'), displayPath, 'read')
+		return this._decodeText(buffer, displayPath, 'read')
 	}
 
 	async *streamText(target: FsTarget, signal?: AbortSignal): AsyncGenerator<string> {
 		const displayPath = this._pathOf(target)
-		let response: AgentResult
-		try {
-			response = await this._transport.request('read', { path: displayPath })
-		} catch (error) {
-			throw toFsError(error, displayPath, 'read')
-		}
-		const buffer = Buffer.from(response.base64, 'base64')
-		if (buffer.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
-			throw new FsError(`cannot read "${displayPath}": binary file`, 'FS_NOT_TEXT')
-		}
+		const buffer = await this._readRaw(displayPath, 'read')
+		this._assertNotBinary(buffer, displayPath, 'read')
 		const decoder = new TextDecoder('utf-8', { fatal: true })
-		for (let offset = 0; offset < buffer.length; offset += 64 * 1024) {
+		for (let offset = 0; offset < buffer.length; offset += TEXT_CHUNK_BYTES) {
 			this._aborted(signal, 'read')
-			yield decoder.decode(buffer.subarray(offset, offset + 64 * 1024), { stream: offset + 64 * 1024 < buffer.length })
+			yield decoder.decode(buffer.subarray(offset, offset + TEXT_CHUNK_BYTES), { stream: offset + TEXT_CHUNK_BYTES < buffer.length })
 		}
 	}
 
@@ -320,12 +334,7 @@ export class SshFileSystem extends FileSystem {
 		this._aborted(signal, 'write')
 		const displayPath = this._pathOf(target)
 		return this._withLock<FsWriteResult>(target.targetKey, async () => {
-			let existing: AgentResult
-			try {
-				existing = await this._transport.request('stat', { path: displayPath })
-			} catch (error) {
-				throw toFsError(error, displayPath, 'write')
-			}
+			const existing = await this._statRaw(displayPath, 'write')
 			if (existing.exists && existing.type !== 'file') {
 				throw new FsError(`cannot write "${displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
 			}
@@ -378,12 +387,7 @@ export class SshFileSystem extends FileSystem {
 		this._aborted(signal, 'edit')
 		const displayPath = this._pathOf(target)
 		return this._withLock<FsEditResult>(target.targetKey, async () => {
-			let existing: AgentResult
-			try {
-				existing = await this._transport.request('stat', { path: displayPath })
-			} catch (error) {
-				throw toFsError(error, displayPath, 'edit')
-			}
+			const existing = await this._statRaw(displayPath, 'edit')
 			if (!existing.exists) {
 				throw new FsError(`cannot edit "${displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
 			}
@@ -393,13 +397,7 @@ export class SshFileSystem extends FileSystem {
 			if (expected && existing.version !== expected.version) {
 				throw new FsError(`cannot edit "${displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
 			}
-			let response: AgentResult
-			try {
-				response = await this._transport.request('read', { path: displayPath })
-			} catch (error) {
-				throw toFsError(error, displayPath, 'edit')
-			}
-			const raw = Buffer.from(response.base64, 'base64')
+			const raw = await this._readRaw(displayPath, 'edit')
 			const content = this._decodeText(raw, displayPath, 'edit')
 			const lineEndings = detectLineEndings(content)
 			const edited = applyLiteralEdit(normalizeLineEndings(content), edit.oldString, edit.newString, edit.replaceAll, displayPath)

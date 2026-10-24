@@ -55,10 +55,6 @@ export interface RemoteSystem {
 export class RemoteAgentError extends Error {
 	code: string
 
-	/**
-	 * @param code - the agent-supplied error code, from the `FS_*` vocabulary.
-	 * @param message - the agent-supplied failure message.
-	 */
 	constructor(code: string, message: string) {
 		super(message)
 		this.name = 'RemoteAgentError'
@@ -68,10 +64,6 @@ export class RemoteAgentError extends Error {
 
 /** The remote call failed at the transport level, not the operation level. */
 export class SshTransportError extends Error {
-	/**
-	 * @param message - transport-level failure description.
-	 * @param cause - the underlying error, when there is one.
-	 */
 	constructor(message: string, cause?: unknown) {
 		super(message)
 		this.name = 'SshTransportError'
@@ -137,9 +129,6 @@ export class SshTransport {
 	/** Live `ssh` children of agent requests, so {@link close} can end them. */
 	#children = new Set<ChildProcess>()
 
-	/**
-	 * @param config - resolved plugin configuration.
-	 */
 	constructor(config: SshTransportConfig) {
 		this.#config = config
 	}
@@ -254,6 +243,13 @@ export class SshTransport {
 		})
 	}
 
+	/** Whether a failed call gets the single backed-off replay; performs it when so. */
+	async #replay(op: string, payload: Record<string, unknown>, options: SshRequestOptions): Promise<AgentResult | undefined> {
+		if (!REPLAYABLE_OPS.has(op) || options.retried) return undefined
+		await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS))
+		return this.request(op, payload, { ...options, retried: true })
+	}
+
 	/**
 	 * Run one agent operation.
 	 *
@@ -279,10 +275,8 @@ export class SshTransport {
 		try {
 			({ stdout, stderr, code } = await this.#run(command, frame, timeoutMs))
 		} catch (error) {
-			if (REPLAYABLE_OPS.has(op) && !options.retried) {
-				await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS))
-				return this.request(op, payload, { ...options, retried: true })
-			}
+			const replayed = await this.#replay(op, payload, options)
+			if (replayed !== undefined) return replayed
 			throw error
 		}
 
@@ -299,10 +293,8 @@ export class SshTransport {
 
 		if (!answer) {
 			const note = [stderr.trim(), ...lines].filter(Boolean).join(' | ')
-			if (REPLAYABLE_OPS.has(op) && !options.retried) {
-				await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS))
-				return this.request(op, payload, { ...options, retried: true })
-			}
+			const replayed = await this.#replay(op, payload, options)
+			if (replayed !== undefined) return replayed
 			throw new SshTransportError(
 				`remote ${op} returned no response (exit ${code})${note ? `: ${note.slice(0, 500)}` : ''}`,
 			)
