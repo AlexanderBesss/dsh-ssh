@@ -41,7 +41,7 @@ const entry = join(packageDir, (typeof exp === 'string' ? exp : exp?.default) ??
 const results: { label: string; ok: boolean }[] = []
 function check(label: string, ok: boolean, detail = '') {
 	results.push({ label, ok })
-	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  Ã¢â‚¬â€ ${detail}` : ''}`)
+	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`)
 	return ok
 }
 

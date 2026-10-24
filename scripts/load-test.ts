@@ -9,7 +9,7 @@
  * Run:  node dist/scripts/load-test.js [host] [remoteRoot]
  *
  * It uses the live SSH host when reachable, so the assertions cover the whole
- * path â€” module graph, service registration, and a real remote operation
+ * path — module graph, service registration, and a real remote operation
  * through the FileSystem class rather than through the transport directly.
  */
 
@@ -33,7 +33,7 @@ class ToolsStub extends Service {
 const results: any[] = []
 function check(label: string, ok: boolean, detail: any = '') {
 	results.push({ label, ok, detail })
-	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  â€” ${detail}` : ''}`)
+	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`)
 }
 
 // The probe file is created by this script, and the fs contract has no delete,

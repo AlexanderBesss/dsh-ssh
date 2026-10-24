@@ -4,7 +4,7 @@
  * The agent is plain PowerShell with no SSH dependency in its request handling,
  * so it can be exercised against the local filesystem before any remote host is
  * involved. That separates "the agent logic is wrong" from "the SSH transport is
- * wrong" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the two failure modes that otherwise get confused at first contact.
+ * wrong" — the two failure modes that otherwise get confused at first contact.
  *
  * Usage: node dist/scripts/agent-smoke.js
  */

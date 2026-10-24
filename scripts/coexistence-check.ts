@@ -34,13 +34,13 @@
  * read must return local bytes AND move `localFsCalls`; a remote `stat` must be
  * answered with `localFsCalls` frozen; a spawn with a local `cwd` must print the
  * local root AND move `localSpawnCalls`, while the same spawn with the remote
- * `cwd` must print the remote path with `localSpawnCalls` NOT moving Ã¢â‚¬â€ that path
+ * `cwd` must print the remote path with `localSpawnCalls` NOT moving — that path
  * only exists on the remote PC, so it can only come over SSH.
  *
  * The last two checks cover the cases the patch layer hid. A SECOND context
  * mounted at `192.0.2.1` (TEST-NET-1, guaranteed to time out) has to keep
  * serving local reads and local commands with the remote channel permanently
- * dead Ã¢â‚¬â€ the shape a dropped VPN produces every day. And a THIRD context with no
+ * dead — the shape a dropped VPN produces every day. And a THIRD context with no
  * local providers at all, mounted with `mode: 'replace'`, pins the legacy
  * app-wide takeover so the old deployment keeps working.
  *
@@ -92,12 +92,12 @@ async function step(label: string, fn: () => any) {
 		const ms = Date.now() - started
 		clock.total += ms
 		results.push({ label, ok: true, ms, detail })
-		console.log(`PASS  ${label}  (${ms} ms)${detail ? `  Ã¢â‚¬â€ ${detail}` : ''}`)
+		console.log(`PASS  ${label}  (${ms} ms)${detail ? `  — ${detail}` : ''}`)
 	} catch (error) {
 		const ms = Date.now() - started
 		clock.total += ms
 		results.push({ label, ok: false, ms, detail: String((error as any)?.message ?? error) })
-		console.log(`FAIL  ${label}  (${ms} ms)  Ã¢â‚¬â€ ${(error as any)?.message ?? error}`)
+		console.log(`FAIL  ${label}  (${ms} ms)  — ${(error as any)?.message ?? error}`)
 	}
 }
 
@@ -136,7 +136,7 @@ function applyLiteralEdit(content: string, oldString: any, newString: any, repla
 /**
  * The app's local filesystem, stood up for real.
  *
- * Registered as a real cordis service Ã¢â‚¬â€ `super(ctx)` occupies `fs` Ã¢â‚¬â€ so the
+ * Registered as a real cordis service — `super(ctx)` occupies `fs` — so the
  * plugin collides with it exactly as it collides with the app's own local
  * provider, and a router delegating here gets bytes off disk.
  *
@@ -401,8 +401,8 @@ class OutputTail {
  * The app's local subprocess runtime, stood up for real on
  * `node:child_process`, registered as the `subprocess` service.
  *
- * The handle shape mirrors the SSH provider exactly Ã¢â‚¬â€ `{ stdin, stdout, stderr,
- * control, collected, done, terminate, waitForExit }` Ã¢â‚¬â€ because a router that
+ * The handle shape mirrors the SSH provider exactly — `{ stdin, stdout, stderr,
+ * control, collected, done, terminate, waitForExit }` — because a router that
  * mixes the two must be able to treat one handle like the other, and a shape
  * drift here would be a coexistence bug the harness is here to catch.
  *
@@ -704,7 +704,7 @@ await step('local read is served by the local implementation', async () => {
 	if (grew === 0) {
 		throw new Error(`readText answered without touching the local provider: localFsCalls stayed at ${before}, so the answer came over ssh (${implOf(scope)})`)
 	}
-	return `localFsCalls ${before} Ã¢â€ â€™ ${stats.localFsCalls}, content ${JSON.stringify(firstLine(text))}`
+	return `localFsCalls ${before} → ${stats.localFsCalls}, content ${JSON.stringify(firstLine(text))}`
 })
 
 await step('remote stat is served by the ssh implementation', async () => {
@@ -716,7 +716,7 @@ await step('remote stat is served by the ssh implementation', async () => {
 		throw new Error(`stat of ${remoteRoot} = ${JSON.stringify(info)}, expected type=directory (${implOf(scope)})`)
 	}
 	if (after !== before) {
-		throw new Error(`stat of ${remoteRoot} reached the local provider: localFsCalls ${before} Ã¢â€ â€™ ${after}, so the local disk answered a remote path (${implOf(scope)})`)
+		throw new Error(`stat of ${remoteRoot} reached the local provider: localFsCalls ${before} → ${after}, so the local disk answered a remote path (${implOf(scope)})`)
 	}
 	return `${info.type} size=${info.size}, localFsCalls frozen at ${after}`
 })
@@ -731,13 +731,13 @@ await step('local write lands on the local disk', async () => {
 	}
 	const onDisk = readFileSync(localProbes[1], 'utf8')
 	if (!onDisk.includes('written locally through the router')) {
-		throw new Error(`node:fs sees ${JSON.stringify(onDisk.slice(0, 120))} at ${localProbes[1]}: the write went to the remote host, not the local disk (localFsCalls ${before} Ã¢â€ â€™ ${stats.localFsCalls}, ${implOf(ctx)})`)
+		throw new Error(`node:fs sees ${JSON.stringify(onDisk.slice(0, 120))} at ${localProbes[1]}: the write went to the remote host, not the local disk (localFsCalls ${before} → ${stats.localFsCalls}, ${implOf(ctx)})`)
 	}
 	if (grew === 0) {
 		throw new Error(`writeText of a local path never reached the local provider: localFsCalls stayed at ${before} (${implOf(scope)})`)
 	}
 	rmSync(localProbes[1], { force: true })
-	return `operation=create, version=${written.version}, verified with node:fs then rmSync; localFsCalls ${before} Ã¢â€ â€™ ${stats.localFsCalls}`
+	return `operation=create, version=${written.version}, verified with node:fs then rmSync; localFsCalls ${before} → ${stats.localFsCalls}`
 })
 
 await step('remote write lands on the remote host', async () => {
@@ -749,10 +749,10 @@ await step('remote write lands on the remote host', async () => {
 		throw new Error(`remote probe round trip failed: operation=${JSON.stringify(written?.operation)} read=${JSON.stringify(String(text).slice(0, 120))} (${implOf(scope)})`)
 	}
 	if (stats.localFsCalls !== before) {
-		throw new Error(`the remote probe reached the local provider: localFsCalls ${before} Ã¢â€ â€™ ${stats.localFsCalls} (${implOf(scope)})`)
+		throw new Error(`the remote probe reached the local provider: localFsCalls ${before} → ${stats.localFsCalls} (${implOf(scope)})`)
 	}
 	// The fs contract has no delete, so removal runs over the subprocess seam,
-	// with a remote cwd Ã¢â‚¬â€ the same route the pwsh tool takes.
+	// with a remote cwd — the same route the pwsh tool takes.
 	const removed = await run(scope, ['cmd', '/c', 'del', '/q', remoteProbe], remoteRoot)
 	const after = await scope.fs.stat(target)
 	if (after?.type === 'file') {
@@ -772,7 +772,7 @@ await step('local edit changes the file on the local disk', async () => {
 	if (stats.localFsCalls - before === 0) {
 		throw new Error(`editText of a local path never reached the local provider: localFsCalls stayed at ${before} (${implOf(scope)})`)
 	}
-	return `before=${JSON.stringify(firstLine(edited.before))} after=${JSON.stringify(firstLine(edited.after))}, confirmed with node:fs; localFsCalls ${before} Ã¢â€ â€™ ${stats.localFsCalls}`
+	return `before=${JSON.stringify(firstLine(edited.before))} after=${JSON.stringify(firstLine(edited.after))}, confirmed with node:fs; localFsCalls ${before} → ${stats.localFsCalls}`
 })
 
 await step('subprocess with a local cwd runs locally', async () => {
@@ -786,7 +786,7 @@ await step('subprocess with a local cwd runs locally', async () => {
 	if (after - before === 0) {
 		throw new Error(`a local-cwd spawn answered without touching the local provider: localSpawnCalls stayed at ${before}, so cmd ran over ssh (${implOf(scope)})`)
 	}
-	return `cd printed ${JSON.stringify(firstLine(out))}; localSpawnCalls ${before} Ã¢â€ â€™ ${after}`
+	return `cd printed ${JSON.stringify(firstLine(out))}; localSpawnCalls ${before} → ${after}`
 })
 
 await step('subprocess with a remote cwd runs remotely', async () => {
@@ -799,7 +799,7 @@ await step('subprocess with a remote cwd runs remotely', async () => {
 		throw new Error(`cwd=${remoteRoot} printed ${JSON.stringify(out.trim().slice(0, 160))}, which is not the remote root (exit=${probe.outcome.exitCode} err=${JSON.stringify(String(probe.stderr).slice(0, 120))}, ${implOf(ctx)})`)
 	}
 	if (after !== before) {
-		throw new Error(`a remote-cwd spawn reached the local provider: localSpawnCalls ${before} Ã¢â€ â€™ ${after}, so the local cmd.exe answered a remote cwd (${implOf(scope)})`)
+		throw new Error(`a remote-cwd spawn reached the local provider: localSpawnCalls ${before} → ${after}, so the local cmd.exe answered a remote cwd (${implOf(scope)})`)
 	}
 	return `cd printed ${JSON.stringify(firstLine(out))}; localSpawnCalls frozen at ${after}`
 })
@@ -837,7 +837,7 @@ await step('an unreachable ssh host cannot break local work', async () => {
 	if (afterSpawn - beforeSpawn === 0) {
 		throw new Error(`the echo did not run locally: localSpawnCalls stayed at ${beforeSpawn} (${implOf(bh)})`)
 	}
-	return `readText ok, localFsCalls ${beforeFs} Ã¢â€ â€™ ${blackHoleStats.localFsCalls}; echo ${JSON.stringify(firstLine(probe.stdout))}, localSpawnCalls ${beforeSpawn} Ã¢â€ â€™ ${afterSpawn}`
+	return `readText ok, localFsCalls ${beforeFs} → ${blackHoleStats.localFsCalls}; echo ${JSON.stringify(firstLine(probe.stdout))}, localSpawnCalls ${beforeSpawn} → ${afterSpawn}`
 })
 
 await step('legacy replace mode still replaces both providers app-wide', async () => {

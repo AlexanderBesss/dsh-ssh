@@ -1,8 +1,8 @@
 /**
  * Live transport check against a real SSH host.
  *
- * Runs the same code path the plugin uses â€” persistent agent, JSON ops, and a
- * per-command ssh spawn â€” without needing DSH installed.
+ * Runs the same code path the plugin uses — persistent agent, JSON ops, and a
+ * per-command ssh spawn — without needing DSH installed.
  *
  * Usage: node dist/scripts/transport-live.js <host> [remoteRoot]
  */

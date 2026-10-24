@@ -33,11 +33,8 @@ function defaultFile(): string {
 }
 
 /**
- * Load (or start) the root set for one host.
- *
- * @param host - the configured SSH destination; roots are namespaced by it.
- * @param file - state file override, for tests.
- * @returns the store; reads never fail — a corrupt file starts a fresh set.
+ * Load (or start) the root set for one host; reads never fail — a corrupt file
+ * starts a fresh set. `file` is a state-file override, for tests.
  */
 export function createWorkspaceRootStore(host: string, file = defaultFile()): WorkspaceRootStore {
 	// Case-folded keys, first spelling kept: NTFS lookups are case-insensitive,

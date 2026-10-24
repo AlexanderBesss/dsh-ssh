@@ -185,9 +185,6 @@ function messageOf(error: unknown): string {
  * failed".
  */
 class PolicyError extends Error {
-	/**
-	 * @param message - the human-readable refusal.
-	 */
 	constructor(message: string) {
 		super(message)
 		this.name = 'PolicyError'
@@ -251,13 +248,8 @@ function validSegment(name: string): boolean {
  * ------------------------------------------------------------------ */
 
 /**
- * Register `/ssh-workspace` routes for the remote workspace picker.
- *
- * @param config - the resolved plugin configuration.
- * @param transport - the plugin's SSH transport (shared with the fs providers).
- * @param webServer - the app's web server service.
- * @param roots - the persistent set of picker-prepared workspace paths.
- * @returns a disposer that removes the route registration.
+ * Register `/ssh-workspace` routes for the remote workspace picker; returns a
+ * disposer that removes the route registration.
  */
 export function registerWorkspaceRoutes(
 	config: WorkspaceRouteConfig,

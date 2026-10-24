@@ -29,12 +29,12 @@ async function step(label: string, fn: () => any) {
 		const ms = Date.now() - started
 		clock.total += ms
 		results.push({ label, ok: true, ms, detail })
-		console.log(`PASS  ${label}  (${ms} ms)${detail ? `  Ã¢â‚¬â€ ${detail}` : ''}`)
+		console.log(`PASS  ${label}  (${ms} ms)${detail ? `  — ${detail}` : ''}`)
 	} catch (error) {
 		const ms = Date.now() - started
 		clock.total += ms
 		results.push({ label, ok: false, ms, detail: String((error as any)?.message ?? error) })
-		console.log(`FAIL  ${label}  (${ms} ms)  Ã¢â‚¬â€ ${(error as any)?.message ?? error}`)
+		console.log(`FAIL  ${label}  (${ms} ms)  — ${(error as any)?.message ?? error}`)
 	}
 }
 

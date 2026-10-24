@@ -1,6 +1,6 @@
 /**
  * How does the cordis composition behave when the plugin's provider, the app's
- * local provider, and (optionally) a service interceptor meet Ã¢â‚¬â€ including when
+ * local provider, and (optionally) a service interceptor meet — including when
  * the plugin is built against a SECOND copy of cordis?
  *
  * Two questions this settles, both of which decide the architecture of
@@ -35,7 +35,7 @@ const repoNodeModules = join(root, '..', 'node_modules', '@deepseek-ai')
 const results: any[] = []
 function check(label: string, ok: boolean, detail: any = '') {
 	results.push({ label, ok })
-	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  Ã¢â‚¬â€ ${detail}` : ''}`)
+	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`)
 }
 
 /** Build `<tree>/node_modules/@deepseek-ai/{cordis,schemastery}` from the repo copies. */
@@ -150,7 +150,7 @@ async function phase(label, fn) {
   }
 }
 
-// Phase 1: the local provider alone Ã¢â‚¬â€ the app as it runs today.
+// Phase 1: the local provider alone — the app as it runs today.
 await phase('phase1_localOnly', async () => {
   const ctx = fresh()
   new LocalFileSystem(ctx)

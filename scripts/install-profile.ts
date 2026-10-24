@@ -15,7 +15,7 @@
  * toggle. Toggling then writes `disabled` into `cordis.patch.yml` for the
  * matching entry id, or moves the name in and out of `dsh.profile.bundles`.
  *
- * Prefer the Plugins page itself when it is available Ã¢â‚¬â€ it does all of this and
+ * Prefer the Plugins page itself when it is available — it does all of this and
  * shows the result. This script exists for the case where you want the
  * operation scripted.
  *
