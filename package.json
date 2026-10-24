@@ -30,6 +30,7 @@
   "scripts": {
     "build": "tsc && tsdown",
     "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test dist/test/",
     "prepare": "npm run build"
   },
   "keywords": [
