@@ -321,7 +321,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 			createElement(
 				'div',
 				{ style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' } },
-				createElement('strong', { style: { fontSize: '14px' } }, 'New workspace — where is the folder?'),
+				createElement('strong', { style: { fontSize: '14px' } }, 'New workspace'),
 				createElement('button', { style: buttonStyle, onClick: onCancel }, 'close'),
 			),
 			view === 'choose'
@@ -425,7 +425,7 @@ function RemoteDirectoryFlow(props: FlowProps) {
 								disabled: commitDisabled,
 								onClick: () => void pickHere(),
 							},
-							'open workspace here',
+							'open',
 						),
 					)
 				: null,

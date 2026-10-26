@@ -11,7 +11,7 @@ import { appendFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { symbols } from '@deepseek-ai/cordis'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import { SshTransport } from './transport.js'
 import { SshFileSystem } from './fs-provider.js'
 import { SshSubprocessRuntime } from './subprocess-provider.js'
@@ -26,10 +26,11 @@ export const name = 'ssh'
 /** Route-mode gate: hold the fiber until the app's fs/subprocess/webServer exist, so `apply` reads them synchronously and never registers under the public names. */
 export const inject = ['tools', 'fs', 'subprocess', 'webServer']
 
+// the Plugins page form edits exactly the volatile fields; dropping .volatile() hides the form
 export const Config = Schema.object({
-	host: Schema.string().default('192.168.0.68'),
-	remoteRoot: Schema.string().required(),
-	remoteLabel: Schema.string().default('remote'),
+	host: Schema.string().default('192.168.0.68').volatile(),
+	remoteRoot: Schema.string().required().volatile(),
+	remoteLabel: Schema.string().default('remote').volatile(),
 	mode: Schema.string().default('route'),
 	defaultSide: Schema.string().default('auto'),
 	sshBin: Schema.string().default('ssh'),
@@ -41,9 +42,9 @@ export const Config = Schema.object({
 })
 
 export interface SshConfig {
-	host: string
-	remoteRoot: string
-	remoteLabel: string
+	host: Volatile<string>
+	remoteRoot: Volatile<string>
+	remoteLabel: Volatile<string>
 	mode: string
 	defaultSide: string
 	sshBin: string
@@ -52,6 +53,12 @@ export interface SshConfig {
 	mapRipgrep: boolean
 	connectTimeoutMs: number
 	requestTimeoutMs: number
+}
+
+export interface SshRuntime extends Omit<SshConfig, 'host' | 'remoteRoot' | 'remoteLabel'> {
+	host: string
+	remoteRoot: string
+	remoteLabel: string
 }
 
 function findPackagedRipgrep(): string | undefined {
@@ -69,7 +76,7 @@ function findPackagedRipgrep(): string | undefined {
 }
 
 /** `dsh-tools` may not resolve here (same reason as seams); a status tool must never fail the plugin. */
-async function registerStatusTool(ctx: Context, config: SshConfig, transport: SshTransport, filesystem: SshFileSystem): Promise<void> {
+async function registerStatusTool(ctx: Context, config: SshRuntime, transport: SshTransport, filesystem: SshFileSystem): Promise<void> {
 	let defineTool: any
 	try {
 		;({ defineTool } = await import('@deepseek-ai/dsh-tools'))
@@ -116,7 +123,7 @@ function bootTrace(message: string): void {
 }
 
 /** The mode this mount will run: a misrequested `replace` downgrades to route. */
-function resolveMode(ctx: Context, config: SshConfig, allowReplace: boolean): string {
+function resolveMode(ctx: Context, config: SshRuntime, allowReplace: boolean): string {
 	let mode = config.mode
 	if (mode === 'replace' && !allowReplace) {
 		ctx.logger.warn('dsh-ssh: mode "replace" requested through the route-mode entry, whose inject gate waits for the very providers replace mode withdraws — staying in route mode. Mount "dsh-ssh/replace" for the remote-only shape.')
@@ -132,7 +139,7 @@ function resolveMode(ctx: Context, config: SshConfig, allowReplace: boolean): st
 /** The router forwards to the raw instances behind the service proxies — cordis binds method receivers to the proxy. */
 function publishRouters(
 	ctx: Context,
-	config: SshConfig,
+	config: SshRuntime,
 	localFs: any,
 	localSubprocess: any,
 	filesystem: SshFileSystem,
@@ -156,7 +163,7 @@ function publishRouters(
 }
 
 /** Bring the channel up and pre-ship ripgrep off the critical path. */
-function connectAndWarm(ctx: Context, config: SshConfig, transport: SshTransport, subprocess: SshSubprocessRuntime): void {
+function connectAndWarm(ctx: Context, config: SshRuntime, transport: SshTransport, subprocess: SshSubprocessRuntime): void {
 	void (async () => {
 		await transport.connect()
 		const facts = transport.system
@@ -174,7 +181,7 @@ function connectAndWarm(ctx: Context, config: SshConfig, transport: SshTransport
  * `ctx.get` deliberately bypasses the inject gate — exactly how route mode
  * reads `fs`.
  */
-function bringUpWorkspacePicker(ctx: Context, config: SshConfig, transport: SshTransport, workspaceRoots: ReturnType<typeof createWorkspaceRootStore>): void {
+function bringUpWorkspacePicker(ctx: Context, config: SshRuntime, transport: SshTransport, workspaceRoots: ReturnType<typeof createWorkspaceRootStore>): void {
 	let routesUp = false
 	const bringUpRoutes = (webServer: any, via: string): void => {
 		if (routesUp || !webServer) return
@@ -219,16 +226,22 @@ function bringUpWorkspacePicker(ctx: Context, config: SshConfig, transport: SshT
 
 /** Shared body of both entries. `allowReplace` marks the replace entry; the route-mode entry must never take the public names — its gate waits for exactly the providers replace mode withdraws. */
 export function applyModule(ctx: Context, config: SshConfig, allowReplace = false): void {
+	const runtime: SshRuntime = {
+		...config,
+		host: config.host.get(),
+		remoteRoot: config.remoteRoot.get(),
+		remoteLabel: config.remoteLabel.get(),
+	}
 	bootTrace(`apply start (mode=${config.mode}) fs=${!!ctx.get?.('fs', false)} subprocess=${!!ctx.get?.('subprocess', false)} webServer=${!!ctx.get?.('webServer', false)}`)
-	if (!isAbsolute(config.remoteRoot)) {
-		ctx.logger.error(`dsh-ssh: remoteRoot must be an absolute remote path, got "${config.remoteRoot}"`)
+	if (!isAbsolute(runtime.remoteRoot)) {
+		ctx.logger.error(`dsh-ssh: remoteRoot must be an absolute remote path, got "${runtime.remoteRoot}"`)
 		return
 	}
 
-	const mode = resolveMode(ctx, config, allowReplace)
+	const mode = resolveMode(ctx, runtime, allowReplace)
 
 	const transport = new SshTransport({
-		host: config.host,
+		host: runtime.host,
 		sshBin: config.sshBin,
 		sshArgs: config.sshArgs,
 		remoteShell: config.remoteShell,
@@ -242,8 +255,8 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	}, 'dsh-ssh: remote agent lifecycle')
 
 	// picker-prepared roots join the routing set and survive restarts
-	const workspaceRoots = createWorkspaceRootStore(config.host)
-	const remoteRoots = () => [config.remoteRoot, ...workspaceRoots.roots()]
+	const workspaceRoots = createWorkspaceRootStore(runtime.host)
+	const remoteRoots = () => [runtime.remoteRoot, ...workspaceRoots.roots()]
 
 	const localFs = mode === 'replace' ? undefined : ctx.get?.('fs', false)
 	const localSubprocess = mode === 'replace' ? undefined : ctx.get?.('subprocess', false)
@@ -256,7 +269,7 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	// only 'replace' may take the public names; private names make a clash impossible
 	const filesystem = new SshFileSystem(
 		ctx,
-		{ cwd: config.remoteRoot, mirror: mode === 'replace' ? undefined : createMirror(remoteRoots) },
+		{ cwd: runtime.remoteRoot, mirror: mode === 'replace' ? undefined : createMirror(remoteRoots) },
 		transport,
 		mode === 'replace' ? 'fs' : 'ssh-fs',
 	)
@@ -267,15 +280,20 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 		mode === 'replace' ? 'subprocess' : 'ssh-subprocess',
 	)
 
-	if (route) publishRouters(ctx, config, localFs, localSubprocess, filesystem, subprocess, remoteRoots)
+	if (route) publishRouters(ctx, runtime, localFs, localSubprocess, filesystem, subprocess, remoteRoots)
 
-	connectAndWarm(ctx, config, transport, subprocess)
+	connectAndWarm(ctx, runtime, transport, subprocess)
 
-	void registerStatusTool(ctx, config, transport, filesystem).catch((error) => {
+	void registerStatusTool(ctx, runtime, transport, filesystem).catch((error) => {
 		ctx.logger.warn?.(`dsh-ssh: ssh_status tool not registered: ${error?.message ?? error}`)
 	})
 
-	bringUpWorkspacePicker(ctx, config, transport, workspaceRoots)
+	bringUpWorkspacePicker(ctx, runtime, transport, workspaceRoots)
+
+	ctx.inject(['settings'], (scope: any) => {
+		const dispose = scope.settings.configure({ auto: false }, ctx.fiber)
+		return () => dispose()
+	})
 }
 
 export function apply(ctx: Context, config: SshConfig): void {
