@@ -78,6 +78,7 @@ test('fs router forwards by target, keeps the prototype, and guards unlisted met
 	assert.equal(router.processPath({ displayPath: 'C:\\Work\\a' }), 'remote:C:\\Work\\a')
 	assert.equal(router.processPath({ displayPath: 'D:\\a' }), 'D:\\a')
 	assert.equal(router.processPathFromHostPath('C:\\anything'), 'local-host-map')
+	assert.equal(router.processPathFromHostPath('C:\\Work\\out\\report.md'), 'remote-host-map')
 
 	assert.equal(router.someProp, 7)
 	assert.equal(router.whoAmI(), 7, 'method binds to the local implementation')

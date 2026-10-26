@@ -6,11 +6,13 @@ import type { Readable, Writable } from 'node:stream'
 import { SubprocessExecutableNotFoundError, SubprocessRuntime } from './seams.js'
 import type { SpawnHandle, SpawnOutcome, SpawnSpec, StdioMode, TerminalEnvironment } from './seams.js'
 import type { SshTransport } from './transport.js'
+import { plumbingRootOf, prunePlumbingScript, rewriteGitPlumbing } from './git-plumbing.js'
 
 export interface SshSubprocessConfig {
 	cwd?: string
 	remoteShell?: string
 	mapRipgrep?: boolean
+	remoteRoots?: () => readonly string[]
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647
@@ -81,6 +83,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		super(ctx, slot)
 		this._config = config
 		this._transport = transport
+		void this._transport.ensureSystem().catch(() => void 0)
 		// Unloading the plugin must stop every remote command still running.
 		ctx.effect(() => async () => {
 			for (const entry of this._live) entry.terminate()
@@ -289,9 +292,23 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			`$si.Arguments = ${q(argv.slice(1).map((entry) => msvcQuote(String(entry))).join(' '))}`,
 		]
 		if (spec.cwd) statements.push(`$si.WorkingDirectory = ${q(String(spec.cwd))}`)
-		for (const [key, value] of Object.entries(spec.env ?? {})) {
-			if (value === undefined) continue
-			statements.push(`$si.EnvironmentVariables[${q(key)}] = ${q(String(value))}`)
+		let envEntries = Object.entries(spec.env ?? {}).flatMap(
+			([key, value]) => value === undefined ? [] : [[key, String(value)]] as [string, string][],
+		)
+		const plumbingRoot = plumbingRootOf(this._transport.system?.home)
+		if (envEntries.length > 0 && plumbingRoot !== undefined && this._config.remoteRoots !== undefined) {
+			const rewrite = rewriteGitPlumbing(Object.fromEntries(envEntries), this._config.remoteRoots(), plumbingRoot)
+			if (rewrite.remapped) {
+				envEntries = Object.entries(rewrite.env)
+				statements.unshift(`New-Item -ItemType Directory -Force -Path ${q(plumbingRoot)} | Out-Null`)
+				for (const dir of rewrite.createdDirs) {
+					if (dir !== plumbingRoot) statements.push(`New-Item -ItemType Directory -Force -Path ${q(dir)} | Out-Null`)
+				}
+				statements.push(prunePlumbingScript(plumbingRoot))
+			}
+		}
+		for (const [key, value] of envEntries) {
+			statements.push(`$si.EnvironmentVariables[${q(key)}] = ${q(value)}`)
 		}
 		statements.push('$proc = [Diagnostics.Process]::Start($si)')
 		statements.push('$proc.WaitForExit()')

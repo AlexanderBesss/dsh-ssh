@@ -118,7 +118,7 @@ export function createFsRouter({ local, remote, remoteRoots }: { local: object; 
 	overrides.fileUrl = (args) => sideForTarget(remoteRoots, args[0])
 	overrides.resolve = (args) => sideFor(remoteRoots, args[0], args[1]?.cwd)
 	overrides.lstat = (args) => sideFor(remoteRoots, args[0], args[1]?.cwd)
-	overrides.processPathFromHostPath = () => 'local'
+	overrides.processPathFromHostPath = (args) => sideFor(remoteRoots, args[0], undefined)
 	// Unlisted methods: local, unless the first argument names a remote target.
 	return createRouter(local, remote, overrides, (_name, args) => {
 		const first = args[0]

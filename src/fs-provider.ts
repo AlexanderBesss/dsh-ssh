@@ -18,6 +18,7 @@ import { contains, normalize, resolvePath, targetKey } from './remote-path.js'
 export interface SshFileSystemConfig {
 	cwd: string
 	diffBasisMaxBytes?: number
+	mirror?: (path: string, bytes: Buffer) => Promise<void>
 }
 
 type LineEndings = 'CRLF' | 'LF'
@@ -112,6 +113,20 @@ export class SshFileSystem extends FileSystem {
 		if (signal?.aborted) throw new FsError(`${verb} aborted`, 'FS_ABORTED')
 	}
 
+	_mirror(displayPath: string, bytes: Buffer): void {
+		const mirror = this._config.mirror
+		if (mirror === undefined) return
+		void mirror(displayPath, bytes).catch(() => void 0)
+	}
+
+	async _mirrorSync(displayPath: string, bytes: Buffer): Promise<void> {
+		const mirror = this._config.mirror
+		if (mirror === undefined) return
+		try {
+			await mirror(displayPath, bytes)
+		} catch {}
+	}
+
 	async resolve(path: unknown, opts?: FsResolveOptions): Promise<FsTarget> {
 		this._aborted(opts?.signal, 'resolve')
 		const cwd = opts?.cwd ?? this._config.cwd
@@ -130,14 +145,18 @@ export class SshFileSystem extends FileSystem {
 		return String(target.displayPath)
 	}
 
-	/** The remote world has no path that identifies a host file; `undefined` is the contract's answer. */
-	override processPathFromHostPath(): string | undefined {
-		return undefined
+	/** In the mirror path model a host path names the same target on both machines. */
+	override processPathFromHostPath(hostPath: string): string | undefined {
+		try {
+			return normalize(String(hostPath ?? ''))
+		} catch {
+			return undefined
+		}
 	}
 
 	fileUrl(target: FsTarget): string {
 		const path = String(target.displayPath).replace(/\\/g, '/')
-		return `sftp://${this._transport.host}${path}`
+		return `sftp://${this._transport.host}/${path}`
 	}
 
 	contains(parent: FsTarget, child: FsTarget): boolean {
@@ -206,6 +225,7 @@ export class SshFileSystem extends FileSystem {
 		this._aborted(signal, 'read')
 		const displayPath = this._pathOf(target)
 		const buffer = await this._readRaw(displayPath, 'read')
+		this._mirror(displayPath, buffer)
 		this._aborted(signal, 'read')
 		return this._decodeText(buffer, displayPath, 'read')
 	}
@@ -213,6 +233,7 @@ export class SshFileSystem extends FileSystem {
 	async *streamText(target: FsTarget, signal?: AbortSignal): AsyncGenerator<string> {
 		const displayPath = this._pathOf(target)
 		const buffer = await this._readRaw(displayPath, 'read')
+		this._mirror(displayPath, buffer)
 		this._assertNotBinary(buffer, displayPath, 'read')
 		const decoder = new TextDecoder('utf-8', { fatal: true })
 		for (let offset = 0; offset < buffer.length; offset += TEXT_CHUNK_BYTES) {
@@ -232,7 +253,9 @@ export class SshFileSystem extends FileSystem {
 				throw new FsError(`cannot read "${displayPath}": ${info.size} bytes exceeds the ${maxBytes}-byte limit`, 'FS_TOO_LARGE')
 			}
 			const response = await this._transport.request('read', { path: displayPath })
-			return new Uint8Array(Buffer.from(response.base64, 'base64'))
+			const bytes = Buffer.from(response.base64, 'base64')
+			this._mirror(displayPath, bytes)
+			return new Uint8Array(bytes)
 		} catch (error) {
 			throw toFsError(error, displayPath, 'read')
 		}
@@ -317,6 +340,7 @@ export class SshFileSystem extends FileSystem {
 				throw toFsError(error, displayPath, 'write')
 			}
 			const after = await this._transport.request('stat', { path: displayPath })
+			await this._mirrorSync(displayPath, Buffer.from(content, 'utf8'))
 			return {
 				operation: existing.exists ? 'update' : 'create',
 				version: FsVersion(after.version),
@@ -344,16 +368,18 @@ export class SshFileSystem extends FileSystem {
 			const content = this._decodeText(raw, displayPath, 'edit')
 			const lineEndings = detectLineEndings(content)
 			const edited = applyLiteralEdit(normalizeLineEndings(content), edit.oldString, edit.newString, edit.replaceAll, displayPath)
+			const payload = restoreLineEndings(edited.content, lineEndings)
 			try {
 				await this._transport.request('write', {
 					path: displayPath,
-					base64: Buffer.from(restoreLineEndings(edited.content, lineEndings), 'utf8').toString('base64'),
+					base64: Buffer.from(payload, 'utf8').toString('base64'),
 					expected: expected ?? null,
 				})
 			} catch (error) {
 				throw toFsError(error, displayPath, 'edit')
 			}
 			const after = await this._transport.request('stat', { path: displayPath })
+			await this._mirrorSync(displayPath, Buffer.from(payload, 'utf8'))
 			return {
 				version: FsVersion(after.version),
 				before: normalizeLineEndings(content),

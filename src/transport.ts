@@ -226,7 +226,15 @@ export class SshTransport {
 	/** Establish the channel and cache the remote system facts. */
 	async connect(): Promise<void> {
 		await this.#stageAgent()
+		await this.ensureSystem()
+	}
+
+	/** Remote facts are needed to place git plumbing before the first remote spawn, not just after connect. */
+	async ensureSystem(): Promise<RemoteSystem | undefined> {
+		if (this.#system) return this.#system
+		await this.#stageAgent()
 		this.#system = await this.request('system', {})
+		return this.#system
 	}
 
 	/** One `ssh` invocation with piped stdio. Killing the local client is the only termination primitive. */

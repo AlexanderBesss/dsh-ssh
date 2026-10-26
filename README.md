@@ -108,6 +108,11 @@ Good to know:
 - `watch` on a remote path fails loudly instead of quietly watching a local
   mirror; remote terminal sessions are not supported; a remote command can
   read input present at launch, but not input written later.
+- Files read or written through the tools are also copied to the same path on
+  this machine, so changed-file cards, per-file diffs, and the native
+  “open in app on this PC” buttons show real content. The mirror catches up
+  only along paths DSH actually touches: a file produced by a remote shell
+  script appears locally once you preview it, so preview first, then open.
 - Occasionally an `ssh` invocation returns nothing at all; reads absorb that
   with one automatic retry, mutations never auto-retry (their effect may
   already have landed).

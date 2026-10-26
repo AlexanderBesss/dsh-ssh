@@ -18,6 +18,7 @@ import { SshSubprocessRuntime } from './subprocess-provider.js'
 import { createFsRouter, createSubprocessRouter, installRouting } from './routing.js'
 import { registerWorkspaceRoutes } from './workspace-routes.js'
 import { createWorkspaceRootStore } from './workspace-roots.js'
+import { createMirror } from './materialize.js'
 import { isAbsolute } from './remote-path.js'
 
 export const name = 'ssh'
@@ -253,8 +254,18 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	}
 
 	// only 'replace' may take the public names; private names make a clash impossible
-	const filesystem = new SshFileSystem(ctx, { cwd: config.remoteRoot }, transport, mode === 'replace' ? 'fs' : 'ssh-fs')
-	const subprocess = new SshSubprocessRuntime(ctx, { mapRipgrep: config.mapRipgrep }, transport, mode === 'replace' ? 'subprocess' : 'ssh-subprocess')
+	const filesystem = new SshFileSystem(
+		ctx,
+		{ cwd: config.remoteRoot, mirror: mode === 'replace' ? undefined : createMirror(remoteRoots) },
+		transport,
+		mode === 'replace' ? 'fs' : 'ssh-fs',
+	)
+	const subprocess = new SshSubprocessRuntime(
+		ctx,
+		{ mapRipgrep: config.mapRipgrep, remoteRoots },
+		transport,
+		mode === 'replace' ? 'subprocess' : 'ssh-subprocess',
+	)
 
 	if (route) publishRouters(ctx, config, localFs, localSubprocess, filesystem, subprocess, remoteRoots)
 
