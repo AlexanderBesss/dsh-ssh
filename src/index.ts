@@ -28,7 +28,7 @@ export const inject = ['tools', 'fs', 'subprocess', 'webServer']
 
 // the Plugins page form edits exactly the volatile fields; dropping .volatile() hides the form
 export const Config = Schema.object({
-	host: Schema.string().default('192.168.0.68').volatile(),
+	host: Schema.string().default('192.168.0.100').volatile(),
 	remoteRoot: Schema.string().required().volatile(),
 	remoteLabel: Schema.string().default('remote').volatile(),
 	mode: Schema.string().default('route'),

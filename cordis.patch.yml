@@ -7,7 +7,7 @@
       config:
         # resolved by the `ssh` CLI, so ~/.ssh/config Host aliases just work;
         # override in the profile's own cordis.patch.yml (applied after this layer)
-        host: 192.168.0.68
+        host: 192.168.0.100
 
         # sidebar marker: "my-project (remote)"
         remoteLabel: remote
@@ -52,5 +52,5 @@
 #     - id: ssh-replace
 #       name: dsh-ssh/replace
 #       config:
-#         host: 192.168.0.68
+#         host: 192.168.0.100
 #         remoteRoot: 'C:\Users\Public\workplace'

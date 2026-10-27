@@ -55,14 +55,14 @@ package) that mounts the `ssh` row with these values:
 - id: ssh
   name: dsh-ssh
   config:
-    host: 192.168.0.68                      # anything the ssh CLI resolves: IP or Host alias
+    host: 192.168.0.100                     # anything the ssh CLI resolves: IP or Host alias
     remoteRoot: 'C:\Users\Public\workplace' # absolute path ON THE REMOTE machine
     sshArgs: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
 ```
 
 | key | default | meaning |
 | --- | --- | --- |
-| `host` | `192.168.0.68` | ssh destination, resolved by your ssh client (IP or `~/.ssh/config` Host alias) |
+| `host` | `192.168.0.100` | ssh destination, resolved by your ssh client (IP or `~/.ssh/config` Host alias) |
 | `remoteRoot` | — | absolute remote path that becomes the workspace root |
 | `remoteLabel` | `remote` | marker remote workspaces get in the sidebar: `my-project (remote)` |
 | `mode` | `route` | the only mode this entry runs; the remote-only takeover is the separate `dsh-ssh/replace` entry (its full recipe sits commented at the bottom of the shipped patch file) |
