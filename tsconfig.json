@@ -1,23 +1,13 @@
 {
   "compilerOptions": {
-    // ESM through and through: package.json is `"type": "module"`, and the
-    // cordis plugin loader imports real `.js` files, so TypeScript compiles
-    // `src/` + `scripts/` to `dist/` and the package entry points there.
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "nodenext",
-
-    // The two seams are the contract surface; keep the compiler honest about them.
     "strict": true,
     "noImplicitOverride": true,
-
-    // `Symbol.asyncDispose` is used by the coexistence harness watcher, and it
-    // lands on a runtime (Node 22+) that has it.
     "lib": ["ES2022", "ESNext.Disposable"],
-    // TypeScript 7's native compiler does not auto-include `@types/*` the way
-    // the classic one did; name the one this project uses.
+    // TypeScript 7's native compiler does not auto-include @types/* the way the classic one did
     "types": ["node"],
-
     "rootDir": ".",
     "outDir": "dist",
     "declaration": true,

@@ -1,9 +1,3 @@
-/**
- * Drive the model-facing tool sequence (list/read/write/edit/search/build)
- * against a live project on the remote PC, timing every step.
- * Usage: node dist/scripts/remote-project-check.js <host> <projectRoot> [localRgExe]
- */
-
 import { Context, Service } from '@deepseek-ai/cordis'
 import { statSync } from 'node:fs'
 import * as sshPlugin from '../src/index.js'
@@ -76,7 +70,6 @@ if (!ctx.fs || !ctx.subprocess) {
 }
 console.log(`mounted: ctx.fs=${ctx.fs.constructor.name} ctx.subprocess=${ctx.subprocess.constructor.name}\n`)
 
-// ripgrep lives inside app.asar, invisible to plain node: hand the provider the same path the search tools would.
 // warm() timing matters: re-upload costs minutes, verified reuse seconds — the startup cost of every remote session
 await step('warm the remote ripgrep (mapRipgrep)', async () => {
 	const usable = localRg && (() => { try { statSync(localRg); return true } catch { return false } })() ? localRg : undefined
@@ -98,7 +91,6 @@ await step('find a source file in the project (recursive list)', async () => {
 	const stack = [root]
 	const files: any[] = []
 	let listed = 0
-	// six levels deep: real projects keep interesting files below the top dirs
 	for (let depth = 0; depth < 6 && stack.length && files.length < 5; depth += 1) {
 		const level = stack.splice(0, stack.length)
 		for (const dir of level) {

@@ -1,13 +1,4 @@
-/**
- * The remote-side op script: runs ONCE PER SSH INVOCATION (one JSON request on
- * stdin, EOF-closed — required for reliable Windows OpenSSH delivery — one JSON
- * response out). Failures come back as a `__error` hashtable, not exception
- * text. Written for Windows PowerShell 5.1: no `??`, no ternary, no `&&`/`||`.
- * Editing the string array changes the pinned SHA-256 in the tests.
- *
- * @module dsh-ssh/agent-script
- */
-
+// the remote script runs on Windows PowerShell 5.1: no ??, no ternary, no &&/||; editing the string array changes the pinned SHA-256 in the tests
 export const AGENT_SCRIPT = [
 	'$ErrorActionPreference = \'Stop\'',
 	'',

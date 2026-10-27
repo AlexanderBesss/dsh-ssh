@@ -1,18 +1,9 @@
-/**
- * SSH transport: one `ssh` invocation per operation, payload on stdin then
- * close — Windows OpenSSH never delivers stdin past the initial burst to a
- * long-lived reader, so a persistent agent does not work here.
- *
- * @module dsh-ssh/transport
- */
-
 import { spawn } from 'node:child_process'
 import type { ChildProcess, ChildProcessByStdio, SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { Readable, Writable } from 'node:stream'
 import { AGENT_SCRIPT } from './agent-script.js'
 
-/** Facts the remote `system` op reports about the machine behind the channel. */
 export interface RemoteSystem {
 	os?: string
 	machine?: string
@@ -23,7 +14,6 @@ export interface RemoteSystem {
 	comspec?: string
 }
 
-/** A remote agent replied with a structured `{ code, message }` failure. */
 export class RemoteAgentError extends Error {
 	code: string
 
@@ -34,7 +24,6 @@ export class RemoteAgentError extends Error {
 	}
 }
 
-/** The remote call failed at the transport level, not the operation level. */
 export class SshTransportError extends Error {
 	constructor(message: string, cause?: unknown) {
 		super(message)
@@ -43,13 +32,11 @@ export class SshTransportError extends Error {
 	}
 }
 
-/** Safe to replay after a transport failure; a lost mutation may already have landed, never replay it. */
+// replayable after a transport failure; a lost mutation may already have landed, never replay those
 const REPLAYABLE_OPS = new Set(['ping', 'system', 'stat', 'list', 'read', 'range', 'where', 'mkdir', 'hash'])
 
-/** Backoff before the single replay, to let a saturated channel recover. */
 const RETRY_BACKOFF_MS = 1500
 
-/** Resolved plugin configuration subset the transport drives on. */
 export interface SshTransportConfig {
 	host: string
 	sshBin: string
@@ -59,21 +46,17 @@ export interface SshTransportConfig {
 	requestTimeoutMs: number
 }
 
-/** Raw outcome of one `ssh` invocation. */
 export interface SshCallResult {
 	stdout: string
 	stderr: string
 	code: number | null
 }
 
-/** Per-call overrides for {@link SshTransport.request}. */
 export interface SshRequestOptions {
 	timeoutMs?: number
-	/** Internal; marks the single allowed replay. */
 	retried?: boolean
 }
 
-/** One decoded agent response body; callers read known keys, the rest is data. */
 export type AgentResult = Record<string, any>
 
 export class SshTransport {
@@ -81,7 +64,6 @@ export class SshTransport {
 	#staged: Promise<string> | undefined
 	#system: RemoteSystem | undefined
 	#sequence = 0
-	/** Live `ssh` children of agent requests, so {@link close} can end them. */
 	#children = new Set<ChildProcess>()
 
 	constructor(config: SshTransportConfig) {
@@ -100,7 +82,7 @@ export class SshTransport {
 		return [...(this.#config.sshArgs ?? []), this.#config.host, remoteCommand]
 	}
 
-	/** Too big for cmd.exe's command line: the script rides stdin; the hash-named file makes staging idempotent. */
+	// the agent script is too big for a command line: it rides stdin; the hash-named file makes staging idempotent
 	#stageAgent(): Promise<string> {
 		if (this.#staged) return this.#staged
 		const hash = createHash('sha256').update(AGENT_SCRIPT, 'utf8').digest('hex').slice(0, 12)
@@ -119,14 +101,13 @@ export class SshTransport {
 				return path
 			})
 			.catch((error) => {
-				// Let a later call try again rather than caching the failure.
 				this.#staged = undefined
 				throw error
 			})
 		return this.#staged
 	}
 
-	/** Closing stdin after the payload is what makes delivery reliable on this channel. */
+	// windows openssh never delivers stdin past the initial burst: one invocation per op, and closing stdin after the payload is what makes delivery reliable
 	#run(remoteCommand: string, stdin: string | undefined, timeoutMs: number): Promise<SshCallResult> {
 		return new Promise((resolve, reject) => {
 			let child: ChildProcessByStdio<Writable, Readable, Readable>
@@ -176,14 +157,12 @@ export class SshTransport {
 		})
 	}
 
-	/** Whether a failed call gets the single backed-off replay; performs it when so. */
 	async #replay(op: string, payload: Record<string, unknown>, options: SshRequestOptions): Promise<AgentResult | undefined> {
 		if (!REPLAYABLE_OPS.has(op) || options.retried) return undefined
 		await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS))
 		return this.request(op, payload, { ...options, retried: true })
 	}
 
-	/** Run one agent operation; the channel stalling is absorbed by the single read-only replay. */
 	async request(op: string, payload: Record<string, unknown> = {}, options: SshRequestOptions = {}): Promise<AgentResult> {
 		const scriptPath = await this.#stageAgent()
 		const id = `r${++this.#sequence}`
@@ -201,7 +180,7 @@ export class SshTransport {
 			throw error
 		}
 
-		// The agent prints one JSON line per request; other stdout text is a remote banner.
+		// the agent prints one JSON line per request; other stdout text is a remote banner
 		const lines = stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
 		const answer = lines.map((line) => {
 			try {
@@ -223,13 +202,11 @@ export class SshTransport {
 		throw new RemoteAgentError(answer.error?.code ?? 'FS_IO_ERROR', answer.error?.message ?? 'remote agent failure')
 	}
 
-	/** Establish the channel and cache the remote system facts. */
 	async connect(): Promise<void> {
 		await this.#stageAgent()
 		await this.ensureSystem()
 	}
 
-	/** Remote facts are needed to place git plumbing before the first remote spawn, not just after connect. */
 	async ensureSystem(): Promise<RemoteSystem | undefined> {
 		if (this.#system) return this.#system
 		await this.#stageAgent()
@@ -237,7 +214,6 @@ export class SshTransport {
 		return this.#system
 	}
 
-	/** One `ssh` invocation with piped stdio. Killing the local client is the only termination primitive. */
 	spawnCommand(remoteCommand: string, options: SpawnOptions = {}): ChildProcess {
 		return spawn(this.#config.sshBin, this.sshArgv(remoteCommand), {
 			stdio: ['pipe', 'pipe', 'pipe'],
@@ -246,7 +222,6 @@ export class SshTransport {
 		})
 	}
 
-	/** An agent request still in flight must not outlive the plugin. */
 	close(): void {
 		this.#staged = undefined
 		this.#system = undefined
@@ -254,7 +229,7 @@ export class SshTransport {
 			try {
 				child.kill('SIGKILL')
 			} catch {
-				// Already gone.
+				// already gone
 			}
 		}
 		this.#children.clear()

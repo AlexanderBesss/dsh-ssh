@@ -1,11 +1,3 @@
-/**
- * Characterization tests for the Windows path semantics in src/remote-path.ts.
- *
- * These pin the CURRENT behavior (including edge cases: UNC `..` protection,
- * drive-root separator retention, case folding) so refactoring cannot quietly
- * shift it. Run with `npm test`.
- */
-
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { contains, isAbsolute, joinDir, normalize, resolvePath, targetKey } from '../src/remote-path.js'
@@ -25,7 +17,7 @@ test('normalize folds separators, dots and parent segments', () => {
 	assert.equal(normalize('C:/a/b'), 'C:\\a\\b')
 	assert.equal(normalize('C:\\a\\b\\'), 'C:\\a\\b')
 	assert.equal(normalize('C:\\'), 'C:\\')
-	// Quirk pinned as-is: `..` pops the drive segment itself, leaving ''.
+	// quirk pinned as-is: .. pops the drive segment itself, leaving ''
 	assert.equal(normalize('C:\\..\\..'), '')
 })
 
@@ -37,7 +29,6 @@ test('normalize protects the UNC share root from ..', () => {
 
 test('normalize rejects relative and drive-relative paths', () => {
 	assert.throws(() => normalize('relative\\x'), /not an absolute remote path/)
-	// `C:work` is rejected by the absolute guard, not the drive-relative branch.
 	assert.throws(() => normalize('C:work'), /not an absolute remote path/)
 })
 

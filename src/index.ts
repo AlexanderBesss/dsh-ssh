@@ -1,11 +1,3 @@
-/**
- * dsh-ssh route-mode entry. The app-wide takeover is the separate
- * `dsh-ssh/replace` entry (see ./replace.ts); a `mode: replace` written on
- * this row downgrades to route with a warning.
- *
- * @module dsh-ssh
- */
-
 import Schema from '@deepseek-ai/schemastery'
 import { appendFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,7 +15,8 @@ import { isAbsolute } from './remote-path.js'
 
 export const name = 'ssh'
 
-/** Route-mode gate: hold the fiber until the app's fs/subprocess/webServer exist, so `apply` reads them synchronously and never registers under the public names. */
+// route-mode gate: hold the fiber until the app's fs/subprocess/webServer exist, so apply reads them
+// synchronously and never registers under the public names
 export const inject = ['tools', 'fs', 'subprocess', 'webServer']
 
 // the Plugins page form edits exactly the volatile fields; dropping .volatile() hides the form
@@ -62,7 +55,6 @@ export interface SshRuntime extends Omit<SshConfig, 'host' | 'remoteRoot' | 'rem
 }
 
 function findPackagedRipgrep(): string | undefined {
-	// resourcesPath exists only in the packaged Electron app
 	const resources = (process as unknown as { resourcesPath?: string }).resourcesPath
 	if (!resources) return undefined
 	const scope = join(resources, 'app.asar.unpacked', 'dsh', 'node_modules', '@vscode')
@@ -75,7 +67,7 @@ function findPackagedRipgrep(): string | undefined {
 	return undefined
 }
 
-/** `dsh-tools` may not resolve here (same reason as seams); a status tool must never fail the plugin. */
+// dsh-tools may not resolve from an installed plugin; a status tool must never fail the plugin
 async function registerStatusTool(ctx: Context, config: SshRuntime, transport: SshTransport, filesystem: SshFileSystem): Promise<void> {
 	let defineTool: any
 	try {
@@ -115,14 +107,12 @@ async function registerStatusTool(ctx: Context, config: SshRuntime, transport: S
 	}))
 }
 
-/** Boot diagnostics: appends decision points to a %TEMP% log (never beside a read-only install). Failures are fully swallowed. */
 function bootTrace(message: string): void {
 	try {
 		appendFileSync(join(tmpdir(), 'dsh-ssh-boot-trace.log'), `[${new Date().toISOString()}] ${message}\n`)
 	} catch {}
 }
 
-/** The mode this mount will run: a misrequested `replace` downgrades to route. */
 function resolveMode(ctx: Context, config: SshRuntime, allowReplace: boolean): string {
 	let mode = config.mode
 	if (mode === 'replace' && !allowReplace) {
@@ -136,7 +126,7 @@ function resolveMode(ctx: Context, config: SshRuntime, allowReplace: boolean): s
 	return mode
 }
 
-/** The router forwards to the raw instances behind the service proxies — cordis binds method receivers to the proxy. */
+// the router must forward to the raw instances behind the service proxies — cordis binds method receivers to the proxy
 function publishRouters(
 	ctx: Context,
 	config: SshRuntime,
@@ -162,7 +152,6 @@ function publishRouters(
 	ctx.logger.info(`dsh-ssh: routing ${config.remoteRoot} to ${config.host}; all other paths stay on this machine`)
 }
 
-/** Bring the channel up and pre-ship ripgrep off the critical path. */
 function connectAndWarm(ctx: Context, config: SshRuntime, transport: SshTransport, subprocess: SshSubprocessRuntime): void {
 	void (async () => {
 		await transport.connect()
@@ -174,13 +163,8 @@ function connectAndWarm(ctx: Context, config: SshRuntime, transport: SshTranspor
 	})
 }
 
-/**
- * The remote-workspace picker's host half (browser half: src/client, via the
- * './client' export). The poll timer is not decoration: on a cold start the
- * inject callback could stay unfired even with the service registered, and
- * `ctx.get` deliberately bypasses the inject gate — exactly how route mode
- * reads `fs`.
- */
+// the poll timer is not decoration: on a cold start the inject callback can stay unfired even with the
+// service registered, and ctx.get deliberately bypasses the inject gate — exactly how route mode reads fs
 function bringUpWorkspacePicker(ctx: Context, config: SshRuntime, transport: SshTransport, workspaceRoots: ReturnType<typeof createWorkspaceRootStore>): void {
 	let routesUp = false
 	const bringUpRoutes = (webServer: any, via: string): void => {
@@ -224,7 +208,6 @@ function bringUpWorkspacePicker(ctx: Context, config: SshRuntime, transport: Ssh
 	ctx.effect(() => () => clearInterval(timer), 'dsh-ssh: picker route bring-up timer')
 }
 
-/** Shared body of both entries. `allowReplace` marks the replace entry; the route-mode entry must never take the public names — its gate waits for exactly the providers replace mode withdraws. */
 export function applyModule(ctx: Context, config: SshConfig, allowReplace = false): void {
 	const runtime: SshRuntime = {
 		...config,
@@ -249,12 +232,10 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 		requestTimeoutMs: config.requestTimeoutMs,
 	})
 
-	// Unloading the plugin must not leave a remote PowerShell running.
 	ctx.effect(() => () => {
 		transport.close()
 	}, 'dsh-ssh: remote agent lifecycle')
 
-	// picker-prepared roots join the routing set and survive restarts
 	const workspaceRoots = createWorkspaceRootStore(runtime.host)
 	const remoteRoots = () => [runtime.remoteRoot, ...workspaceRoots.roots()]
 

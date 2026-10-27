@@ -16,7 +16,7 @@ export interface SshSubprocessConfig {
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647
-/** 64 KB binary is 88 KB base64 — the largest stdin payload the remote shell relays reliably. */
+// 64 KB binary is 88 KB base64 — the largest stdin payload the remote shell relays reliably
 const UPLOAD_CHUNK_BYTES = 64 * 1024
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
@@ -25,7 +25,6 @@ interface LiveEntry {
 	waitForExit(signal?: AbortSignal): Promise<boolean>
 }
 
-/** No spawn API can carry a NUL byte. */
 function assertNoNul(value: unknown, label: string): void {
 	if (typeof value === 'string' && value.includes('\0')) {
 		const error = new TypeError(`invalid ${label}: NUL bytes are not permitted`) as NodeJS.ErrnoException
@@ -34,7 +33,6 @@ function assertNoNul(value: unknown, label: string): void {
 	}
 }
 
-/** Bounded in-memory tail; absent `spillPath` is a valid provider choice while `lossy`/`nextOffset` stay truthful. */
 class OutputTail {
 	_chunks: Buffer[] = []
 	_bytes = 0
@@ -78,13 +76,11 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	_ripgrepPath?: string
 	_ripgrepPromise?: Promise<string>
 
-	/** `'subprocess'` takes the public name; a private name stays invisible (route mode). */
 	constructor(ctx: Context, config: SshSubprocessConfig, transport: SshTransport, slot = 'subprocess') {
 		super(ctx, slot)
 		this._config = config
 		this._transport = transport
 		void this._transport.ensureSystem().catch(() => void 0)
-		// Unloading the plugin must stop every remote command still running.
 		ctx.effect(() => async () => {
 			for (const entry of this._live) entry.terminate()
 			await Promise.all([...this._live].map((entry) => entry.waitForExit().catch(() => true)))
@@ -92,7 +88,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		}, 'dsh-ssh subprocess teardown')
 	}
 
-	/** Lookup happens in the remote world, honouring the caller's PATH/PATHEXT. */
 	async resolveExecutable(command: unknown, env?: Record<string, string | undefined>, signal?: AbortSignal): Promise<string> {
 		signal?.throwIfAborted?.()
 		assertNoNul(command, 'executable')
@@ -121,7 +116,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		const comspec = this._transport.system?.comspec
 		return {
 			platform: 'windows',
-			// consumers fall back to `cmd.exe` only when the key is absent
+			// consumers fall back to cmd.exe only when the key is absent
 			...(comspec ? { defaultShell: comspec } : {}),
 		}
 	}
@@ -135,7 +130,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return /[\\/]@vscode[\\/]ripgrep/i.test(program) || /^(?:rg|rg\.exe)$/i.test(basename(program))
 	}
 
-	/** Each chunk goes to its own numbered part file (retry-safe), then concat + SHA-256 verify before moving into place. */
 	async _ensureRemoteRipgrep(localProgram: string): Promise<string> {
 		if (this._ripgrepPath) return this._ripgrepPath
 		this._ripgrepPromise ??= (async () => {
@@ -149,8 +143,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			const buffer = readFileSync(localProgram)
 			const expected = createHash('sha256').update(buffer).digest('hex')
 
-			// Reuse a copy an earlier session shipped: two round trips beat a 5 MB
-			// upload over a stalling channel; SHA-256 proves it is the same build.
+			// reuse a copy an earlier session shipped: SHA-256 proves it is the same build
 			const present = await this._transport.request('stat', { path: remote })
 			if (present.exists && present.type === 'file') {
 				const digest = await this._transport.request('hash', { path: remote }, { timeoutMs: 60000 })
@@ -210,7 +203,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		return this._ripgrepPromise
 	}
 
-	/** Synchronous: `spawn` returns a handle without awaiting; until the upload lands, search runs against remote `rg` on PATH. */
+	// spawn is synchronous: until the upload lands, fall back to a remote rg on PATH
 	_resolveProgram(program: string): string {
 		if (!this._isPackagedRipgrep(program)) return program
 		if (this._ripgrepPath) return this._ripgrepPath
@@ -223,7 +216,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		await this._ensureRemoteRipgrep(localProgram)
 	}
 
-	/** Synchronous spec validation, mirroring the local provider's rejections. */
 	_validate(spec: SpawnSpec): void {
 		if (!Number.isFinite(spec.graceMs) || spec.graceMs <= 0 || spec.graceMs > MAX_TIMER_DELAY_MS) {
 			throw new Error(`dsh-ssh: graceMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
@@ -245,18 +237,13 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		}
 	}
 
-	/**
-	 * Neither `cmd.exe` nor PowerShell 5.1 may parse user-influenced text — both
-	 * mangle quotes (`a"&calc` would execute). The launch is one PowerShell
-	 * script starting the process via .NET `ProcessStartInfo`, crossing the wire
-	 * as base64 `-EncodedCommand`. Only the request's explicit `env` layers on
-	 * the remote environment; the local parent environment belongs to another machine.
-	 */
+	// user-influenced text must never be parsed by cmd.exe or PowerShell 5.1 (both mangle quotes — `a"&calc` would execute):
+	// one PowerShell script via -EncodedCommand, the process started through .NET ProcessStartInfo; only the
+	// request's explicit env layers on, the local parent environment belongs to another machine
 	_remoteCommand(spec: SpawnSpec): string {
 		const argv = [...spec.argv]
 		argv[0] = this._resolveProgram(String(argv[0]))
-		// single-quoted PS literal, quotes doubled; newline-carrying values ride
-		// base64 — a here-string terminator could otherwise be forged by the value
+		// single-quoted PS literal, quotes doubled; newline-carrying values ride base64 so a here-string terminator cannot be forged by the value
 		const q = (value: string): string =>
 			value.includes('\n') || value.includes('\r')
 				? `([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(value, 'utf8').toString('base64')}')))`
@@ -282,11 +269,10 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		}
 		const statements: string[] = [
 			"$ErrorActionPreference = 'Stop'",
-			// Progress records would otherwise arrive as CLIXML on stderr and look like the command's own output
+			// progress records would otherwise arrive as CLIXML on stderr and look like the command's own output
 			"$ProgressPreference = 'SilentlyContinue'",
 			'$si = New-Object Diagnostics.ProcessStartInfo',
-			// Must precede EnvironmentVariables access: setting that map while
-			// shell-execute is on throws.
+			// must precede EnvironmentVariables access: setting that map while shell-execute is on throws
 			'$si.UseShellExecute = $false',
 			`$si.FileName = ${q(String(argv[0]))}`,
 			`$si.Arguments = ${q(argv.slice(1).map((entry) => msvcQuote(String(entry))).join(' '))}`,
@@ -334,7 +320,6 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 				return
 			}
 			if (mode === 'inherit') {
-				// no interactive console on this host; our own stream is the honest equivalent
 				stream.pipe(name === 'stdout' ? process.stdout : process.stderr)
 				return
 			}
@@ -363,7 +348,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 					try {
 						child.kill('SIGKILL')
 					} catch {
-						// Already gone.
+						// already gone
 					}
 				}, spec.graceMs)
 				timer.unref?.()
@@ -402,7 +387,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 			})
 		})
 
-		/** True once the direct command's exit is observed; remote descendants are NOT proven quiescent — weaker than the local provider's managed range. */
+		// remote descendants are not proven quiescent on exit — weaker than the local provider's managed range
 		function waitForExit(signal?: AbortSignal): Promise<boolean> {
 			if (signal?.aborted) return Promise.resolve(false)
 			return new Promise((resolve) => {

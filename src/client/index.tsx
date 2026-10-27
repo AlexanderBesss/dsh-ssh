@@ -1,12 +1,4 @@
-/**
- * dsh-ssh browser half: remote folder picker seated in the app's
- * `*.directoryFlow` holes at a lower priority than the shipped native
- * occupant (lowest registered occupant renders), plus the plugin's
- * Configure page in the `plugins.row.config` hole. Remote facts come from
- * `/ssh-workspace/api/*`; no JSX on purpose — tsc never parses JSX here.
- *
- * @module dsh-ssh/client
- */
+// no JSX on purpose in this file — tsc never parses JSX here
 
 import { createElement, Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
@@ -87,7 +79,6 @@ interface BrowseView {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-	// merge headers: a POST's own content-type object must not drop the accept header
 	const headers = new Headers(init?.headers)
 	if (!headers.has('accept')) headers.set('accept', 'application/json')
 	const response = await fetch(`/ssh-workspace/api/${path}`, { ...init, headers })
@@ -101,7 +92,6 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 	return body.data as T
 }
 
-// system colors so the panel follows the page's color scheme
 const panelStyle: Record<string, string> = {
 	boxSizing: 'border-box',
 	width: '640px',
@@ -188,7 +178,6 @@ function RemoteDirectoryFlow(props: FlowProps) {
 	const [busyHere, setBusyHere] = useState('')
 	const [error, setError] = useState('')
 	const armed = useRef(false)
-	// only the newest navigation may commit; stale listings must not land
 	const browseSeq = useRef(0)
 
 	const go = useCallback(async (path: string | null) => {
@@ -204,7 +193,6 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		}
 	}, [])
 
-	// open at the remote's C:\ so the whole PC is one click away; falls back to the drive list
 	const goHome = useCallback(async () => {
 		setError('')
 		const seq = ++browseSeq.current
@@ -281,7 +269,6 @@ function RemoteDirectoryFlow(props: FlowProps) {
 		try {
 			const path = await pickLocal()
 			if (path !== null && path !== undefined && path !== '') onPicked(path)
-			// a null cancel returns to the two-way choice
 			setView('choose')
 		} catch (cause: any) {
 			setError(cause?.message ?? String(cause))
@@ -445,7 +432,6 @@ const SETTINGS_FIELDS = [
 	{ key: 'remoteLabel', label: 'Remote marker', hint: 'titles become “my-project (remote)”' },
 ] as const
 
-/** refuse a save here rather than persist a setting that would make `apply` fail at the next boot */
 function fieldProblem(key: string, value: string): string | undefined {
 	const trimmed = value.trim()
 	switch (key) {
@@ -648,7 +634,6 @@ export function apply(ctx: ClientScope): void {
 		)
 	})
 
-	// filling `plugins.row.config` with `<package name>#<row id>` grows the row's Configure control
 	ctx.inject(['slots'], (scope: ClientScope) =>
 		scope.slots.inject('plugins.row.config', () =>
 			scope.slots.register({ name: 'plugins.row.config', key: ROW_CONFIG_KEY, registrant: REGISTRANT }, (rowProps: RowPageProps) =>

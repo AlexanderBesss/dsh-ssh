@@ -1,23 +1,5 @@
-/**
- * Prove the local world and the remote world coexist in one session.
- *
- * Route mode exists because cordis forbids a second `fs` provider and a
- * provider cannot delegate to the implementation it replaced (`this.ctx.fs` is
- * itself); the plugin instead publishes a router on the `internal/get` read
- * path and leaves the local providers registered.
- *
- * This harness registers REAL local providers and counts every call reaching
- * them: each check asserts the answer AND which implementation produced it —
- * a router quietly serving everything over SSH would pass content-only checks,
- * since the remote PC holds the same file names. Also covers a dead remote
- * channel (TEST-NET-1 black hole) and the legacy `mode: 'replace'` takeover.
- *
- * The remote checks need the live remote PC.
- *
- * Usage: node dist/scripts/coexistence-check.js [host] [remoteRoot] [localRoot]
- *
- * @module dsh-ssh/scripts/coexistence-check
- */
+// proves the local and remote worlds coexist in one session: registers REAL local providers and asserts which impl served every call
+// usage: node dist/scripts/coexistence-check.js [host] [remoteRoot] [localRoot]
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process'
@@ -31,14 +13,12 @@ const host = process.argv[2] ?? '192.168.0.68'
 const remoteRoot = process.argv[3] ?? 'C:\\Users\\AI\\workplace'
 const localRoot = normalize(process.argv[4] ?? join(import.meta.dirname, '..', '..'))
 
-/** Arguments for every ssh invocation: never prompt, and fail fast. */
 const sshArgs = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
-/** A host that routes nowhere: the black-hole context's whole point. */
+// a host that routes nowhere: the black-hole context's whole point
 const blackHoleHost = '192.0.2.1'
 
 const results: any[] = []
 const clock = { total: 0 }
-/** Every context this harness mounted, for teardown. */
 const contexts: { label: string; ctx: Context }[] = []
 
 // counters answer one question: which impl served the call; the spawn counter counts spawns only
@@ -101,7 +81,6 @@ class LocalFileSystem extends FileSystem {
 		this._counters = counters
 	}
 
-	// one increment per call: this is what proves the local impl answered
 	_count() {
 		this._counters.localFsCalls += 1
 	}
@@ -195,7 +174,6 @@ class LocalFileSystem extends FileSystem {
 		} else if (expected?.kind === 'createIfAbsent' && existing) {
 			throw new FsError(`cannot overwrite existing "${path}" without reading it first`, 'FS_NOT_OBSERVED')
 		}
-		// The pre-write snapshot is what the UI renders a diff against.
 		const before = existing ? normalizeText(readFileSync(path, 'utf8')) : null
 		writeFileSync(path, content, 'utf8')
 		return {
@@ -244,7 +222,6 @@ class LocalFileSystem extends FileSystem {
 		})
 	}
 
-	/** Case-insensitive containment, as NTFS identity demands. */
 	contains(parent: any, child: any) {
 		this._count()
 		const fold = (value: any) => resolve(this._root, String(value?.displayPath ?? value)).replace(/[\\/]+$/, '').toLowerCase()
@@ -258,7 +235,6 @@ class LocalFileSystem extends FileSystem {
 		return this._pathOf(target)
 	}
 
-	// host path maps straight through — the half a remote provider cannot do
 	override processPathFromHostPath(hostPath: any) {
 		this._count()
 		if (hostPath === undefined || hostPath === null) return undefined
@@ -271,12 +247,11 @@ class LocalFileSystem extends FileSystem {
 		return pathToFileURL(this._pathOf(target)).href
 	}
 
-	/** No confinement claimed, matching the shipped local backend. */
 	override get sandboxMode(): undefined {
 		return undefined
 	}
 
-	// watches the PARENT dir: fs.watch on a file dies when the file is replaced
+	// watches the parent dir: fs.watch on a file dies when the file is replaced
 	override watch(target: any, changed: () => void, signal?: AbortSignal) {
 		this._count()
 		signal?.throwIfAborted?.()
@@ -329,7 +304,6 @@ class OutputTail {
 	}
 }
 
-// the handle shape mirrors the SSH provider's exactly: shape drift would be a coexistence bug
 class LocalSubprocess extends SubprocessRuntime {
 	_counters: any
 
@@ -435,7 +409,7 @@ class LocalSubprocess extends SubprocessRuntime {
 				try {
 					child.kill('SIGKILL')
 				} catch {
-					// Already gone.
+					// already gone
 				}
 			}, Number.isFinite(spec.graceMs) && spec.graceMs > 0 ? spec.graceMs : 3000)
 			timer.unref?.()
@@ -451,7 +425,7 @@ class LocalSubprocess extends SubprocessRuntime {
 			stdin: streams.stdin,
 			stdout: streams.stdout,
 			stderr: streams.stderr,
-			// Present as a key, as the SSH provider exposes it: consumers read it.
+			// always present as a key: consumers read it unconditionally
 			control: undefined,
 			collected: collectors,
 			done: settled,
@@ -464,7 +438,6 @@ class LocalSubprocess extends SubprocessRuntime {
 	}
 }
 
-/** Stand-in for the tool registry, so the plugin's `inject: ['tools']` resolves. */
 class ToolsStub extends Service {
 	registered: any[] = []
 	constructor(ctx: Context) {
@@ -490,7 +463,6 @@ async function run(ctx: any, argv: string[], cwd: string) {
 	}
 }
 
-// a plugin fiber is the only place cordis runs the read waterfall — the routed view
 async function consumerFiber(ctx: any) {
 	let scope: any
 	await ctx.plugin({
@@ -563,7 +535,6 @@ await step('route mode mounts with the local providers registered (no duplicate-
 	return implOf(ctx)
 })
 if (mountError) {
-	// a duplicate `fs` registration is the exact failure route mode exists to avoid
 	console.error(`plugin failed to apply: ${mountError?.message ?? mountError}`)
 	await finish()
 }
@@ -689,7 +660,6 @@ await step('subprocess with a remote cwd runs remotely', async () => {
 	const probe = await run(scope, ['cmd', '/c', 'cd'], remoteRoot)
 	const after = stats.localSpawnCalls
 	const out = String(probe.stdout)
-	// The remote PC's own path can only be printed by a command that ran there.
 	if (!out.toLowerCase().includes(remoteClean.toLowerCase())) {
 		throw new Error(`cwd=${remoteRoot} printed ${JSON.stringify(out.trim().slice(0, 160))}, which is not the remote root (exit=${probe.outcome.exitCode} err=${JSON.stringify(String(probe.stderr).slice(0, 120))}, ${implOf(ctx)})`)
 	}
@@ -738,7 +708,6 @@ await step('an unreachable ssh host cannot break local work', async () => {
 await step('legacy replace mode still replaces both providers app-wide', async () => {
 	const legacy = new Context()
 	contexts.push({ label: 'replace', ctx: legacy })
-	// no local providers: the pre-coexistence deployment, patch-disabled
 	new ToolsStub(legacy)
 	await legacy.plugin(sshPlugin as any, {
 		host,

@@ -1,9 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-// The client half rides dsh's browser module table: the bundle registers
-// itself through window.__ModuleLoader__.load, and the app's own React and
-// client packages are required at runtime, never bundled — the exact shape
-// dsh-docker-sandbox ships (its tsdown.config.ts is the reference).
+// the bundle registers into dsh's browser module table via the banner below; react stays external — the app provides it at runtime, never bundle it
 const CLIENT_ID = 'dsh-ssh'
 
 const banner = [

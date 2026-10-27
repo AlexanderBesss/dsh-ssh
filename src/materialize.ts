@@ -1,12 +1,3 @@
-/**
- * Write-through mirror: content served from the remote PC is also written at
- * the same path on this machine, so local consumers (the changes recorder's
- * file captures and native “open in app” handlers) see real bytes instead of
- * the empty mirror folders the workspace picker leaves behind.
- *
- * @module dsh-ssh/materialize
- */
-
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { contains, isAbsolute } from './remote-path.js'

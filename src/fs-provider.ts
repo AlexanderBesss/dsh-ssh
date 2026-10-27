@@ -27,7 +27,6 @@ const BINARY_SAMPLE_BYTES = 8192
 const DEFAULT_DIFF_BASIS_MAX_BYTES = 10 * 1024 * 1024
 const TEXT_CHUNK_BYTES = 64 * 1024
 
-/** Failures are mapped into the `FS_*` taxonomy here; callers branch on `code`, never on message text. */
 function toFsError(error: unknown, displayPath: string, verb: string): FsError {
 	if (error instanceof FsError) return error
 	if (error instanceof RemoteAgentError) {
@@ -39,7 +38,6 @@ function toFsError(error: unknown, displayPath: string, verb: string): FsError {
 	return new FsError(`cannot ${verb} "${displayPath}": ${(error as any)?.message ?? String(error)}`, 'FS_IO_ERROR')
 }
 
-/** LF-normalize, matching the local backend's model-facing text form. */
 function normalizeLineEndings(content: string): string {
 	return content.replaceAll('\r\n', '\n')
 }
@@ -82,7 +80,6 @@ export class SshFileSystem extends FileSystem {
 	_config: SshFileSystemConfig
 	_locks = new Map<string, Promise<unknown>>()
 
-	/** `'fs'` takes the public name; a private name stays invisible to consumers (route mode). */
 	constructor(ctx: Context, config: SshFileSystemConfig, transport: SshTransport, slot = 'fs') {
 		super(ctx, slot)
 		this._config = config
@@ -93,7 +90,6 @@ export class SshFileSystem extends FileSystem {
 		return this._config.cwd
 	}
 
-	/** Mutations serialize per target — the contract's critical section. */
 	async _withLock<T>(key: string, op: () => T | Promise<T>): Promise<T> {
 		const run = (this._locks.get(key) ?? Promise.resolve()).then(op, op)
 		const tail = run.then(() => void 0, () => void 0)
@@ -145,7 +141,7 @@ export class SshFileSystem extends FileSystem {
 		return String(target.displayPath)
 	}
 
-	/** In the mirror path model a host path names the same target on both machines. */
+	// in the mirror path model a host path names the same target on both machines
 	override processPathFromHostPath(hostPath: string): string | undefined {
 		try {
 			return normalize(String(hostPath ?? ''))
@@ -319,7 +315,7 @@ export class SshFileSystem extends FileSystem {
 				throw new FsError(`cannot overwrite existing "${displayPath}" without reading it first`, 'FS_NOT_OBSERVED')
 			}
 
-			// The pre-write snapshot is what the UI renders a diff against.
+			// the pre-write snapshot is what the UI renders a diff against
 			let before: string | null = null
 			if (existing.exists && Buffer.byteLength(content, 'utf8') < (this._config.diffBasisMaxBytes ?? DEFAULT_DIFF_BASIS_MAX_BYTES)) {
 				try {

@@ -1,10 +1,4 @@
-/**
- * Load the plugin in a real cordis instance and prove the swap happened.
- * Unresolvable imports make the entry throw and `apply()` silently never run
- * — nothing short of mounting the plugin catches that, so this mounts it.
- *
- * Run:  node dist/scripts/load-test.js [host] [remoteRoot]
- */
+// mounts the plugin in a real cordis instance: unresolvable imports otherwise leave apply() silently never run
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import * as sshPlugin from '../src/index.js'
@@ -12,7 +6,6 @@ import * as sshPlugin from '../src/index.js'
 const host = process.argv[2] ?? '192.168.0.68'
 const remoteRoot = process.argv[3] ?? 'C:\\Users\\AI\\workplace'
 
-/** Stand-in for the tool registry, so `inject: ['tools']` resolves. */
 class ToolsStub extends Service {
 	registered: any[] = []
 	constructor(ctx: Context) {
@@ -43,7 +36,6 @@ const mounted = ctx.plugin(sshPlugin as any, {
 })
 
 try {
-	// plugin() settles once applied; unresolvable imports reject here — the guarded regression
 	await mounted
 } catch (error) {
 	console.error(`\nplugin failed to apply: ${(error as any)?.message ?? error}`)
@@ -57,7 +49,6 @@ check('ctx.subprocess is the SSH provider', ctx.subprocess?.constructor?.name ==
 check('fs.watch reports unsupported', typeof ctx.fs?.watch === 'function')
 check('sandboxMode is undefined (no confinement claimed)', ctx.fs?.sandboxMode === undefined, String(ctx.fs?.sandboxMode))
 
-// exercise the FileSystem class itself — the layer every file tool calls
 try {
 	const target = await ctx.fs.resolve('probe-load-test.txt', {})
 	const before = await ctx.fs.stat(target)
@@ -92,7 +83,6 @@ try {
 	check('remote filesystem operations', false, (error as any)?.message ?? String(error))
 }
 
-// the subprocess contract: executable lookup happens on the remote host
 try {
 	const resolved = await ctx.subprocess.resolveExecutable('ping', {})
 	check('resolveExecutable finds a remote executable', typeof resolved === 'string' && resolved.length > 0, resolved)

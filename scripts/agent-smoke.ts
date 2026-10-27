@@ -1,7 +1,4 @@
-/**
- * Smoke-test the agent script locally (no SSH): separates "agent logic wrong"
- * from "transport wrong". Usage: node dist/scripts/agent-smoke.js
- */
+// smoke-test the agent script locally (no SSH): separates "agent logic wrong" from "transport wrong"
 
 import { AGENT_SCRIPT } from '../src/agent-script.js'
 import { mkdirSync, writeFileSync } from 'node:fs'

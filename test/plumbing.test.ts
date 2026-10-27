@@ -1,9 +1,3 @@
-/**
- * Characterization tests for the git-plumbing env rewrite (src/git-plumbing.ts),
- * the write-through mirror (src/materialize.ts), and the fs-provider hooks
- * they feed. Run with `npm test`.
- */
-
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

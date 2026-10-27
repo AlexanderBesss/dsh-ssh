@@ -1,14 +1,5 @@
-/**
- * Local stand-ins for the app's `fs` / `subprocess` base classes: internal
- * `@deepseek-ai/dsh-*` packages do not resolve from an installed plugin, and
- * importing them would break the entry module before `apply()` runs.
- *
- * MUST KEEP: service classes must not use `#private` fields — cordis hands out
- * services through a proxy, and a private field is unreachable from the proxy
- * receiver. The providers below use `_`-prefixed fields for that reason.
- *
- * @module dsh-ssh/seams
- */
+// cordis services must not use #private fields: they are handed out through a proxy, and a private field is
+// unreachable from the proxy receiver — the providers below use `_`-prefixed fields for that reason
 
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
@@ -24,14 +15,12 @@ export function FsTargetKey(key: string): FsTargetKey {
 	return key as FsTargetKey
 }
 
-/** Brand a string as an `FsVersion`. Identity function, matching upstream. */
 export function FsVersion(version: string): FsVersion {
 	return version as FsVersion
 }
 
 export type FsEntryType = 'file' | 'directory' | 'symlink' | 'other'
 
-/** The `FS_*` codes this plugin's errors use; unknown remote codes map to `FS_IO_ERROR`. */
 export type FsErrorCode =
 	| 'FS_IO_ERROR'
 	| 'FS_NOT_FOUND'
@@ -64,7 +53,6 @@ export interface FsDirEntry {
 	size?: number
 }
 
-/** Conditional-write guard: `{ kind: 'replaceIfVersion', version }` or `{ kind: 'createIfAbsent' }`. */
 export interface FsExpected {
 	kind?: string
 	version?: FsVersion
@@ -104,7 +92,6 @@ export interface FsResolveOptions {
 	signal?: AbortSignal
 }
 
-/** Typed filesystem failure carrying a stable `FS_*` code. */
 export class FsError extends Error {
 	code: FsErrorCode
 
@@ -115,9 +102,7 @@ export class FsError extends Error {
 	}
 }
 
-/** Abstract filesystem provider, as `ctx.fs`. */
 export class FileSystem extends Service {
-	/** `'fs'` takes the public name; any other name stays invisible to consumers (route mode). */
 	constructor(ctx: Context, slot = 'fs') {
 		super(ctx, slot)
 	}
@@ -136,14 +121,12 @@ export class FileSystem extends Service {
 	}
 }
 
-/** The methods a subprocess backend must add: `resolveExecutable`, `terminalEnvironment`, `spawn`, `spawnTerminal`. */
 export class SubprocessRuntime extends Service {
 	constructor(ctx: Context, slot = 'subprocess') {
 		super(ctx, slot)
 	}
 }
 
-/** Executable lookup completed without finding an executable file. */
 export class SubprocessExecutableNotFoundError extends Error {
 	constructor(message: string, options?: ErrorOptions) {
 		super(message, options)
@@ -164,7 +147,6 @@ export interface SpawnSpec {
 	cwd?: string
 	env?: Record<string, string | undefined>
 	stdio?: SpawnStdio
-	/** Grace between graceful termination and force before the request is abandoned. */
 	graceMs: number
 	signal?: AbortSignal
 }
@@ -182,7 +164,7 @@ export interface SpawnHandle {
 	stdin?: Writable
 	stdout?: Readable
 	stderr?: Readable
-	/** Always present as a key: consumers read it unconditionally. */
+	// always present as a key: consumers read it unconditionally
 	control?: unknown
 	collected: Record<string, OutputTailReader>
 	done: Promise<SpawnOutcome>

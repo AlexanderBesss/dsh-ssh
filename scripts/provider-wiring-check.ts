@@ -1,13 +1,3 @@
-/**
- * How the cordis composition behaves when the plugin's provider, the app's
- * local provider, and an interceptor meet — with the plugin built against a
- * SECOND copy of cordis (the app's own lives in app.asar, so two copies of
- * the same version reproduce it faithfully). Settles provider precedence per
- * mount order, and whether any delegation path out of a provider works.
- *
- * Usage: node dist/scripts/provider-wiring-check.js
- */
-
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -21,7 +11,6 @@ function check(label: string, ok: boolean, detail: any = '') {
 	console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`)
 }
 
-/** Build `<tree>/node_modules/@deepseek-ai/{cordis,schemastery}` from the repo copies. */
 function buildTree(name: string) {
 	const tree = join(root, name)
 	rmSync(tree, { recursive: true, force: true })
@@ -237,7 +226,6 @@ if (run.status !== 0) {
 		console.log(`  ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
 	}
 	check('the local provider serves ctx.fs on its own', out.phase1_localOnly === 'local', out.phase1_localOnly)
-	// measured facts, not expectations — the evidence for why route mode exists
 	check('a second fs provider throws when the plugin mounts first', String(out.phase2_pluginFirst).startsWith('threw: service "fs" has been registered'), out.phase2_pluginFirst)
 	check('a second fs provider throws in the real app order too', String(out.phase3_pluginSecond).startsWith('threw: service "fs" has been registered'), out.phase3_pluginSecond)
 	check('config is resolved and reaches apply()', typeof out.phase3_seen?.config?.marker === 'string', JSON.stringify(out.phase3_seen?.config))

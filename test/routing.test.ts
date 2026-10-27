@@ -1,12 +1,3 @@
-/**
- * Characterization tests for the route-mode classifiers and routers in
- * src/routing.ts, plus the argv shape of src/transport.ts.
- *
- * The fakes stand in for the local and remote providers; every assertion pins
- * which implementation served a call, the same trick coexistence-check uses
- * against the real app. Run with `npm test`.
- */
-
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SshTransport } from '../src/transport.js'
@@ -83,7 +74,6 @@ test('fs router forwards by target, keeps the prototype, and guards unlisted met
 	assert.equal(router.someProp, 7)
 	assert.equal(router.whoAmI(), 7, 'method binds to the local implementation')
 
-	// An unlisted method with a remote-shaped target must fail loudly, not serve the local mirror.
 	assert.throws(() => router.notListed({ displayPath: 'C:\\Work\\a' }), TypeError)
 	assert.equal(router.notListed({ displayPath: 'D:\\x' }), 'local-extra:D:\\x')
 	assert.equal(router.notListed('a plain string'), 'local-extra:plain')

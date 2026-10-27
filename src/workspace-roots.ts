@@ -1,11 +1,3 @@
-/**
- * Extra remote workspace roots opened by the picker, persisted per host under
- * `~/.dsh` — without them a workspace outside `remoteRoot` would be served by
- * its empty local mirror.
- *
- * @module dsh-ssh/workspace-roots
- */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +11,6 @@ function defaultFile(): string {
 	return join(homedir(), '.dsh', 'dsh-ssh-workspaces.json')
 }
 
-/** Reads never fail; a corrupt file starts a fresh set. `file` override is for tests. */
 export function createWorkspaceRootStore(host: string, file = defaultFile()): WorkspaceRootStore {
 	// case-folded keys, first spelling kept: `C:\Work` and `c:\work` are one root
 	const set = new Map<string, string>()

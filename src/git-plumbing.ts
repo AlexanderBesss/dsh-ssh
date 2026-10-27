@@ -1,11 +1,4 @@
-/**
- * Remote spawn plumbing: git scratch paths that exist only on this machine
- * must become remote paths when the command itself runs remotely, or
- * `git add`/`git write-tree` fail before touching the repository.
- *
- * @module dsh-ssh/git-plumbing
- */
-
+// local git scratch paths exist only on this machine: commands that run remotely need them remapped onto remote paths
 import { createHash } from 'node:crypto'
 import { contains, normalize } from './remote-path.js'
 

@@ -1,14 +1,3 @@
-/**
- * `/ssh-workspace/api/*` — the host half of the remote-workspace picker
- * (browser half: src/client). Routes: info, drives, browse, mkdir, prepare.
- * The whole family is fenced to loopback + same-origin requests. `prepare`
- * makes an empty local mirror at the same absolute path — the workspace
- * registry stats paths locally, while route mode serves the real traffic
- * over SSH.
- *
- * @module dsh-ssh/workspace-routes
- */
-
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdir, stat as statLocal } from 'node:fs/promises'
 import { isAbsolute as isLocalAbsolute, win32 } from 'node:path'
@@ -38,8 +27,6 @@ export interface RemoteBrowse {
 	parent: string | null
 	entries: RemoteDirEntry[]
 }
-
-// loopback + same-origin fence, same semantics as the app's own picker fence
 
 function isIPv4Loopback(v4: string): boolean {
 	const parts = v4.split('.')
@@ -92,7 +79,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 const ok = (data: unknown) => ({ ok: true, data })
 const fail = (message: string) => ({ ok: false, error: { message } })
 
-/** Malformed/oversized bodies are answered here (400/413) and reported as `null`, so the caller must not touch the response again. */
+// malformed/oversized bodies are answered here (400/413) and reported as null: the caller must not touch the response again
 async function readJsonObject(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
 	const chunks: Buffer[] = []
 	let size = 0
@@ -117,7 +104,6 @@ async function readJsonObject(req: IncomingMessage, res: ServerResponse): Promis
 			return parsed as Record<string, unknown>
 		}
 	} catch {
-		// fall through to the refusal below
 	}
 	writeJson(res, 400, fail('expected a JSON object body'))
 	return null
@@ -134,7 +120,6 @@ class PolicyError extends Error {
 	}
 }
 
-/** Any absolute Windows path is browsable; relative/drive-relative/wildcards stay refused, and `normalize` folds traversal away. */
 function freePath(path: string): string {
 	const trimmed = path.trim()
 	if (trimmed === '') throw new PolicyError('a path is required')
@@ -144,7 +129,6 @@ function freePath(path: string): string {
 	if (/[*?"<>|]/.test(trimmed)) {
 		throw new PolicyError(`"${path}" contains characters that are illegal in Windows paths`)
 	}
-	// a colon past the drive = NTFS alternate data stream or mangled path — 400, not an obscure remote 500
 	const segments = trimmed.split(/[\\/]+/)
 	const driveSegments = /^[a-zA-Z]:(?:[\\/]|$)/.test(trimmed) ? 1 : 0
 	for (let index = driveSegments; index < segments.length; index += 1) {
@@ -158,7 +142,6 @@ function freePath(path: string): string {
 function parentOf(target: string): string | null {
 	const trimmed = target.replace(/\\+$/, '')
 	if (/^[a-zA-Z]:$/.test(trimmed)) return null
-	// `\\server` has no sane parent either; "This PC" is next
 	if (/^\\\\[^\\]+$/.test(trimmed)) return null
 	const segments = trimmed.split('\\')
 	if (segments.length <= 1) return null
@@ -171,7 +154,6 @@ function validSegment(name: string): boolean {
 	if (trimmed === '' || trimmed === '.' || trimmed === '..') return false
 	if (/[\\/:*?"<>|]/.test(trimmed)) return false
 	if (/[. ]$/.test(trimmed)) return false
-	// reserved Windows device names, case-insensitive, extension allowed
 	if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(trimmed)) return false
 	return true
 }
@@ -182,9 +164,8 @@ export function registerWorkspaceRoutes(
 	webServer: WebServerLike,
 	roots: WorkspaceRootStore,
 ): () => void {
-	// the agent knows files, not volumes: one-shot PowerShell probe, cached,
-	// own kill timer (requestTimeoutMs guards agent ops, not spawnCommand),
-	// concurrent opens coalesce so a double click cannot mean two hung ssh calls
+	// the agent knows files, not volumes: one-shot PowerShell probe, cached, own kill timer
+	// (requestTimeoutMs guards agent ops, not spawnCommand); concurrent opens coalesce
 	let driveCache: { at: number; list: string[] } | undefined
 	let drivePending: Promise<string[]> | undefined
 	const probeDrives = (): Promise<string[]> => new Promise<string[]>((resolve, reject) => {
@@ -232,7 +213,6 @@ export function registerWorkspaceRoutes(
 				return list
 			})
 			drivePending = run
-			// release the coalescing slot either way; the caller handles the rejection
 			void run.then(() => {}, () => {}).finally(() => {
 				if (drivePending === run) drivePending = undefined
 			})
@@ -295,9 +275,8 @@ export function registerWorkspaceRoutes(
 				if (!remote.exists || remote.type !== 'directory') {
 					throw new PolicyError(`the remote path is not a directory: ${target}`)
 				}
-				// the workspace registry stats paths on THIS machine, so opening a remote
-				// folder needs an empty local dir at the same path; the router serves the
-				// traffic remotely — hence the path joins the root store right here
+				// the workspace registry stats paths on this machine, so opening a remote folder needs an
+				// empty local dir at the same path; the router serves the traffic remotely
 				if (!win32.isAbsolute(target) || !isLocalAbsolute(target) || target.startsWith('\\\\')) {
 					// a UNC mirror would resolve the same on both sides: mkdir would write into the share itself
 					throw new PolicyError(`cannot mirror "${target}" locally — pick a drive-rooted folder (e.g. "C:\\...") for now`)
@@ -305,7 +284,6 @@ export function registerWorkspaceRoutes(
 				try {
 					await mkdir(target, { recursive: true })
 				} catch (cause: any) {
-					// Windows guards other users' profile folders; surface the way out, not a raw EPERM
 					if (cause?.code === 'EPERM' || cause?.code === 'EACCES') {
 						throw new PolicyError(
 							`this machine refuses to create the mirror folder for "${target}" (Windows protects other users' profile folders). Either seed the path once from an elevated terminal (mkdir "${target}", then grant this account modify on "${win32.dirname(target)}"), or keep remote work under a plain folder such as "C:\\workplace" that mirrors cleanly.`,

@@ -1,30 +1,3 @@
-/**
- * Install or remove dsh-ssh from a DSH profile the way the plugin manager does.
- *
- * WHY THIS REPLACED A FILE COPY
- * -----------------------------
- * The first version of this script copied the package into the profile's
- * `node_modules` and appended its name to `dsh.profile.bundles`. That made the
- * plugin load, but it never appeared on the Plugins page. The page lists
- * bundles backed by a manifest dependency; a name in `bundles` with nothing in
- * `dependencies` behind it is not a bundle the manager recognises, so there was
- * no row to toggle. Copying files is not installing a package.
- *
- * This version runs the same `pnpm add` the manager runs, which records the
- * dependency, resolves it, and lets the page show the bundle with its enable
- * toggle. Toggling then writes `disabled` into `cordis.patch.yml` for the
- * matching entry id, or moves the name in and out of `dsh.profile.bundles`.
- *
- * Prefer the Plugins page itself when it is available — it does all of this and
- * shows the result. This script exists for the case where you want the
- * operation scripted.
- *
- * Usage:
- *   node dist/scripts/install-profile.js add    [--profile desktop] [--pnpm <cmd>]
- *   node dist/scripts/install-profile.js remove [--profile desktop] [--pnpm <cmd>]
- *   node dist/scripts/install-profile.js status [--profile desktop]
- */
-
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -108,7 +81,7 @@ if (action === 'status') {
 }
 
 if (action === 'add') {
-	// pnpm first: a bundle row only exists once the manifest names the package.
+	// pnpm first: a bundle row only exists once the manifest names the package
 	const status = runPnpm(['add', pkgRoot])
 	if (status !== 0) {
 		console.error('pnpm add failed; the bundle was not selected')

@@ -1,8 +1,3 @@
-/**
- * Verify the ripgrep shipping path: chunked upload of a ~5 MB binary through a
- * JSON channel, then remote execution. Usage: node dist/scripts/rg-live.js <host>
- */
-
 import { readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { SshTransport } from '../src/transport.js'

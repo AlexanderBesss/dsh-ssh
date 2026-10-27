@@ -1,12 +1,5 @@
-/**
- * Verify the INSTALLED copy of dsh-ssh inside a DSH profile. A peer missing
- * from that node_modules tree makes the entry throw and the plugin register
- * nothing, unreported — importing + mounting the installed entry by path is
- * the only check that catches it.
- *
- * Usage: node dist/scripts/profile-load-check.js [profile] [host] [remoteRoot]
- * Run with the app's own Node so the module graph matches what the app sees.
- */
+// checks the INSTALLED copy of dsh-ssh in a profile: a missing peer makes the entry throw and the plugin register nothing, unreported
+// run with the app's own Node so the module graph matches what the app sees
 
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -46,7 +39,6 @@ const bundles = manifest.dsh?.profile?.bundles ?? []
 check('declared as a profile dependency', Object.keys(manifest.dependencies ?? {}).includes('dsh-ssh'), manifest.dependencies?.['dsh-ssh'])
 check('selected in dsh.profile.bundles', bundles.includes('dsh-ssh'))
 
-// Peer resolution, the exact failure that produces a silent no-op.
 const requireFromEntry = createRequire(join(packageDir, 'noop.js'))
 for (const peer of ['@deepseek-ai/cordis', '@deepseek-ai/schemastery']) {
 	let resolved: string | undefined
@@ -59,7 +51,6 @@ for (const peer of ['@deepseek-ai/cordis', '@deepseek-ai/schemastery']) {
 	check(`peer resolves from the install: ${peer}`, !!resolved, resolved ? `${resolved.split('\\').slice(-2).join('\\')}` : String(error))
 }
 
-// Import the installed entry: a throw here is the silent no-op, made visible.
 let plugin: any
 try {
 	plugin = await import(pathToFileURL(entry).href)
@@ -69,7 +60,6 @@ try {
 	process.exit(1)
 }
 
-// Mount it, with a real `tools` provider so `inject` resolves.
 const { Context, Service } = await import(pathToFileURL(requireFromEntry.resolve('@deepseek-ai/cordis')).href)
 const ServiceCtor = Service as abstract new (ctx: any, name: string) => any
 class ToolsStub extends ServiceCtor {
@@ -95,7 +85,6 @@ try {
 check('ctx.fs is the SSH provider', ctx.fs?.constructor?.name === 'SshFileSystem', ctx.fs?.constructor?.name)
 check('ctx.subprocess is the SSH provider', ctx.subprocess?.constructor?.name === 'SshSubprocessRuntime', ctx.subprocess?.constructor?.name)
 
-// One real remote round trip through the installed code.
 try {
 	const root = await ctx.fs.resolve('.', {})
 	const info = await ctx.fs.stat(root)

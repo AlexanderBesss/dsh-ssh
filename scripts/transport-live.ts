@@ -1,8 +1,3 @@
-/**
- * Live transport check against a real SSH host, no DSH needed.
- * Usage: node dist/scripts/transport-live.js <host> [remoteRoot]
- */
-
 import { SshTransport, RemoteAgentError } from '../src/transport.js'
 
 const host = process.argv[2]
@@ -56,7 +51,6 @@ await step('list scratch', () => transport.request('list', { path: scratch }))
 await step('where ping', () => transport.request('where', { name: 'ping' }))
 await step('where node via PATH', () => transport.request('where', { name: 'node', path: process.env.PATH, pathExt: '.COM;.EXE;.BAT;.CMD' }))
 
-// per-command ssh: the subprocess provider's path
 const runCommand = (line: string) => new Promise<any>((resolve) => {
 	const child = transport.spawnCommand(line)
 	let stdout = ''

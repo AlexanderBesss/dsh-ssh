@@ -1,9 +1,3 @@
-/**
- * The plugin's side of the app's Context augmentation: the app's own packages
- * augment these names inside app.asar, unreachable from here. Loosely typed on
- * purpose — these are runtime promises, not types this package owns.
- */
-
 import '@deepseek-ai/cordis'
 
 declare module '@deepseek-ai/cordis' {
