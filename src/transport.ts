@@ -222,6 +222,17 @@ export class SshTransport {
 		})
 	}
 
+	ptyArgv(remoteCommand: string): string[] {
+		return [...(this.#config.sshArgs ?? []), '-tt', this.#config.host, remoteCommand]
+	}
+
+	spawnPty(remoteCommand: string): ChildProcess {
+		return spawn(this.#config.sshBin, this.ptyArgv(remoteCommand), {
+			stdio: ['pipe', 'pipe', 'pipe'],
+			windowsHide: true,
+		})
+	}
+
 	close(): void {
 		this.#staged = undefined
 		this.#system = undefined

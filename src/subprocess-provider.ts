@@ -4,8 +4,18 @@ import { createHash } from 'node:crypto'
 import { basename, isAbsolute } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { SubprocessExecutableNotFoundError, SubprocessRuntime } from './seams.js'
-import type { SpawnHandle, SpawnOutcome, SpawnSpec, StdioMode, TerminalEnvironment } from './seams.js'
+import type {
+	SpawnHandle,
+	SpawnOutcome,
+	SpawnSpec,
+	StdioMode,
+	TerminalEnvironment,
+	TerminalHandle,
+	TerminalSpawnSpec,
+} from './seams.js'
 import type { SshTransport } from './transport.js'
+import { LineTerminalSession, PtyTerminalSession, posixTerminalShell, resolveTerminalMode } from './terminal-session.js'
+import { trace } from './trace.js'
 import { plumbingRootOf, prunePlumbingScript, rewriteGitPlumbing } from './git-plumbing.js'
 
 export interface SshSubprocessConfig {
@@ -13,6 +23,7 @@ export interface SshSubprocessConfig {
 	remoteShell?: string
 	mapRipgrep?: boolean
 	remoteRoots?: () => readonly string[]
+	terminalMode?: string
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647
@@ -73,6 +84,7 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 	_config: SshSubprocessConfig
 	_transport: SshTransport
 	_live = new Set<LiveEntry>()
+	_terminals = new Set<TerminalHandle>()
 	_ripgrepPath?: string
 	_ripgrepPromise?: Promise<string>
 
@@ -82,6 +94,8 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 		this._transport = transport
 		void this._transport.ensureSystem().catch(() => void 0)
 		ctx.effect(() => async () => {
+			for (const terminal of this._terminals) await terminal.terminate().catch(() => void 0)
+			this._terminals.clear()
 			for (const entry of this._live) entry.terminate()
 			await Promise.all([...this._live].map((entry) => entry.waitForExit().catch(() => true)))
 			this._live.clear()
@@ -113,16 +127,32 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
 
 	async terminalEnvironment(signal?: AbortSignal): Promise<TerminalEnvironment> {
 		signal?.throwIfAborted?.()
-		const comspec = this._transport.system?.comspec
+		const system = this._transport.system
+		const os = system?.os ?? ''
+		const posix = os.length > 0 && !/windows/i.test(os)
+		const shell = posix ? '/bin/bash' : system?.comspec
 		return {
-			platform: 'windows',
+			platform: posix ? 'posix' : 'windows',
 			// consumers fall back to cmd.exe only when the key is absent
-			...(comspec ? { defaultShell: comspec } : {}),
+			...(shell ? { defaultShell: shell } : {}),
 		}
 	}
 
-	async spawnTerminal(): Promise<never> {
-		throw new Error('dsh-ssh: remote terminal sessions are not supported; use the pwsh tool for remote commands')
+	_terminalMode(): 'line' | 'pty' {
+		return resolveTerminalMode(this._config.terminalMode, this._transport.system?.os)
+	}
+
+	async spawnTerminal(spec: TerminalSpawnSpec): Promise<TerminalHandle> {
+		trace(`remote spawnTerminal cwd=${JSON.stringify(spec.cwd)} argv0=${JSON.stringify(spec.argv?.[0] ?? '')}`)
+		spec.signal?.throwIfAborted?.()
+		if (!Number.isFinite(spec.graceMs) || spec.graceMs <= 0) throw new Error('dsh-ssh: graceMs must be a positive finite number')
+		const shell = this._config.remoteShell && this._config.remoteShell.length > 0 ? this._config.remoteShell : 'powershell'
+		const session = this._terminalMode() === 'pty'
+			? new PtyTerminalSession(this._transport, { shell: posixTerminalShell(shell), graceMs: spec.graceMs }, spec)
+			: await LineTerminalSession.create(this._transport, { shell, graceMs: spec.graceMs }, spec)
+		this._terminals.add(session)
+		void session.done.catch(() => void 0).then(() => this._terminals.delete(session))
+		return session
 	}
 
 	_isPackagedRipgrep(program: string): boolean {

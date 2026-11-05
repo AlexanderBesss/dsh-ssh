@@ -176,3 +176,39 @@ export interface TerminalEnvironment {
 	platform: string
 	defaultShell?: string
 }
+
+export type TerminalSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL' | 'SIGTSTP' | 'SIGHUP'
+
+export interface TerminalSpawnSpec {
+	argv: readonly string[]
+	cwd: string
+	env?: Record<string, string | undefined> | undefined
+	rows: number
+	cols: number
+	terminalType: string
+	shellActivity?: boolean | undefined
+	graceMs: number
+	signal?: AbortSignal | undefined
+}
+
+export interface TerminalForeground {
+	processGroupId: number
+	inputWaiting: boolean
+}
+
+export interface TerminalActivity {
+	state: 'idle' | 'busy' | 'unknown'
+	revision: number
+}
+
+export interface TerminalHandle {
+	readonly pid: number
+	readonly output: Readable
+	readonly done: Promise<SpawnOutcome>
+	write(data: string): Promise<void>
+	resize(cols: number, rows: number): Promise<void>
+	inspectForeground(): Promise<TerminalForeground | undefined>
+	inspectActivity(): Promise<TerminalActivity>
+	signalForeground(signal: TerminalSignal): Promise<number>
+	terminate(): Promise<void>
+}

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SshTransport } from '../src/transport.js'
-import { createFsRouter, createSubprocessRouter, installRouting, sideFor, sideForTarget } from '../src/routing.js'
+import { createFsRouter, createSubprocessRouter, installRouting, routeSubprocessInstance, sideFor, sideForTarget } from '../src/routing.js'
+
+process.env.DSH_SSH_TRACE = '0'
 
 const roots = () => ['C:\\Work']
 
@@ -144,4 +146,57 @@ test('transport builds the ssh argv', () => {
 	assert.deepEqual(withArgs.sshArgv('dir'), ['-o', 'BatchMode=yes', 'h', 'dir'])
 	const bare = new SshTransport({ host: 'h', sshBin: 'ssh', remoteShell: 'powershell', connectTimeoutMs: 1, requestTimeoutMs: 1 })
 	assert.deepEqual(bare.sshArgv('dir'), ['h', 'dir'])
+})
+
+function fakeProviders() {
+	const calls: string[] = []
+	const local = {
+		spawnTerminal: (..._args: any[]) => { calls.push('local terminal'); return 'L' },
+		spawn: (..._args: any[]) => { calls.push('local spawn'); return 'L' },
+		terminalEnvironment: (..._args: any[]) => 'local',
+		resolveExecutable: async (..._args: any[]) => 'local',
+	}
+	const remote = {
+		spawnTerminal: (..._args: any[]) => { calls.push('remote terminal'); return 'R' },
+		spawn: (..._args: any[]) => { calls.push('remote spawn'); return 'R' },
+		terminalEnvironment: (..._args: any[]) => 'remote',
+		resolveExecutable: async (..._args: any[]) => 'remote',
+	}
+	return { calls, local, remote }
+}
+
+test('the local provider instance itself routes calls made through ctx.get', async () => {
+	const { calls, local, remote } = fakeProviders()
+	const restore = routeSubprocessInstance({ instance: local, remote, remoteRoots: roots, defaultSide: 'auto' })
+
+	assert.equal(local.spawnTerminal({ cwd: 'C:\\Work\\p' }), 'R')
+	assert.equal(local.spawnTerminal({ cwd: 'D:\\other' }), 'L')
+	assert.equal(local.spawn({ cwd: 'C:\\Work\\p\\a.ts' }), 'R')
+	assert.equal(local.terminalEnvironment(), 'local')
+	assert.equal(await local.resolveExecutable('git'), 'local')
+	assert.deepEqual(calls, ['remote terminal', 'local terminal', 'remote spawn'])
+
+	restore()
+	assert.equal(local.spawnTerminal({ cwd: 'C:\\Work\\p' }), 'L')
+	assert.equal(local.terminalEnvironment(), 'local')
+})
+
+test('the instance asks the remote for the shell when defaultSide is remote', async () => {
+	const { local, remote } = fakeProviders()
+	const restore = routeSubprocessInstance({ instance: local, remote, remoteRoots: roots, defaultSide: 'remote' })
+	assert.equal(local.terminalEnvironment(), 'remote')
+	assert.equal(await local.resolveExecutable('powershell'), 'remote')
+	restore()
+	assert.equal(local.terminalEnvironment(), 'local')
+})
+
+test('a locally unresolvable executable is looked up on the remote', async () => {
+	const { local, remote } = fakeProviders()
+	local.resolveExecutable = async () => {
+		throw new Error('not found')
+	}
+	const restore = routeSubprocessInstance({ instance: local, remote, remoteRoots: roots, defaultSide: 'auto' })
+	assert.equal(await local.resolveExecutable('pwsh'), 'remote')
+	restore()
+	await assert.rejects(local.resolveExecutable('pwsh'), /not found/)
 })

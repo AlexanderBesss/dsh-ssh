@@ -1,17 +1,17 @@
 import Schema from '@deepseek-ai/schemastery'
-import { appendFileSync, existsSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { symbols } from '@deepseek-ai/cordis'
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import { SshTransport } from './transport.js'
 import { SshFileSystem } from './fs-provider.js'
 import { SshSubprocessRuntime } from './subprocess-provider.js'
-import { createFsRouter, createSubprocessRouter, installRouting } from './routing.js'
+import { createFsRouter, createSubprocessRouter, installRouting, routeSubprocessInstance } from './routing.js'
 import { registerWorkspaceRoutes } from './workspace-routes.js'
 import { createWorkspaceRootStore } from './workspace-roots.js'
 import { createMirror } from './materialize.js'
 import { isAbsolute } from './remote-path.js'
+import { trace } from './trace.js'
 
 export const name = 'ssh'
 
@@ -29,6 +29,7 @@ export const Config = Schema.object({
 	sshBin: Schema.string().default('ssh'),
 	sshArgs: Schema.array(Schema.string()).default([]),
 	remoteShell: Schema.string().default('powershell'),
+	terminalMode: Schema.string().default('auto'),
 	mapRipgrep: Schema.boolean().default(true),
 	connectTimeoutMs: Schema.number().default(20000),
 	requestTimeoutMs: Schema.number().default(30000),
@@ -43,6 +44,7 @@ export interface SshConfig {
 	sshBin: string
 	sshArgs: string[]
 	remoteShell: string
+	terminalMode: string
 	mapRipgrep: boolean
 	connectTimeoutMs: number
 	requestTimeoutMs: number
@@ -107,12 +109,6 @@ async function registerStatusTool(ctx: Context, config: SshRuntime, transport: S
 	}))
 }
 
-function bootTrace(message: string): void {
-	try {
-		appendFileSync(join(tmpdir(), 'dsh-ssh-boot-trace.log'), `[${new Date().toISOString()}] ${message}\n`)
-	} catch {}
-}
-
 function resolveMode(ctx: Context, config: SshRuntime, allowReplace: boolean): string {
 	let mode = config.mode
 	if (mode === 'replace' && !allowReplace) {
@@ -149,6 +145,13 @@ function publishRouters(
 		defaultSide: config.defaultSide,
 	})
 	installRouting(ctx, { fs: fsRouter, subprocess: subprocessRouter })
+	const restoreSubprocess = routeSubprocessInstance({
+		instance: raw(localSubprocess),
+		remote: subprocess,
+		remoteRoots,
+		defaultSide: config.defaultSide,
+	})
+	ctx.effect(() => restoreSubprocess, 'dsh-ssh: subprocess instance routing')
 	ctx.logger.info(`dsh-ssh: routing ${config.remoteRoot} to ${config.host}; all other paths stay on this machine`)
 }
 
@@ -173,14 +176,14 @@ function bringUpWorkspacePicker(ctx: Context, config: SshRuntime, transport: Ssh
 			const dispose = registerWorkspaceRoutes(config, transport, webServer, workspaceRoots)
 			routesUp = true
 			ctx.effect(() => dispose, 'dsh-ssh: workspace picker routes')
-			bootTrace(`workspace picker routes registered (${via})`)
+			trace(`workspace picker routes registered (${via})`)
 		} catch (error: any) {
-			bootTrace(`route registration failed (${via}): ${error?.message ?? error}`)
+			trace(`route registration failed (${via}): ${error?.message ?? error}`)
 		}
 	}
 
 	ctx.inject(['webServer'], (scope: any) => {
-		bootTrace('webServer inject callback fired')
+		trace('webServer inject callback fired')
 		bringUpRoutes(scope.webServer, 'inject')
 	})
 
@@ -193,12 +196,12 @@ function bringUpWorkspacePicker(ctx: Context, config: SshRuntime, transport: Ssh
 		}
 		if (Date.now() > pollDeadline) {
 			clearInterval(timer)
-			bootTrace('webServer never appeared; picker routes stay down')
+			trace('webServer never appeared; picker routes stay down')
 			return
 		}
 		const webServer = (ctx as any).get?.('webServer', false)
 		if (webServer) {
-			if (pollCount < 3) bootTrace(`webServer visible to ctx.get; inject callback had not fired`)
+			if (pollCount < 3) trace(`webServer visible to ctx.get; inject callback had not fired`)
 			bringUpRoutes(webServer, 'poll')
 			clearInterval(timer)
 		}
@@ -215,7 +218,7 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 		remoteRoot: config.remoteRoot.get(),
 		remoteLabel: config.remoteLabel.get(),
 	}
-	bootTrace(`apply start (mode=${config.mode}) fs=${!!ctx.get?.('fs', false)} subprocess=${!!ctx.get?.('subprocess', false)} webServer=${!!ctx.get?.('webServer', false)}`)
+	trace(`apply start (mode=${config.mode}) fs=${!!ctx.get?.('fs', false)} subprocess=${!!ctx.get?.('subprocess', false)} webServer=${!!ctx.get?.('webServer', false)}`)
 	if (!isAbsolute(runtime.remoteRoot)) {
 		ctx.logger.error(`dsh-ssh: remoteRoot must be an absolute remote path, got "${runtime.remoteRoot}"`)
 		return
@@ -242,7 +245,7 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	const localFs = mode === 'replace' ? undefined : ctx.get?.('fs', false)
 	const localSubprocess = mode === 'replace' ? undefined : ctx.get?.('subprocess', false)
 	const route = mode !== 'replace' && !!localFs && !!localSubprocess
-	bootTrace(`routing decision: route=${route}`)
+	trace(`routing decision: route=${route}`)
 	if (mode !== 'replace' && !route) {
 		ctx.logger.error('dsh-ssh: route mode did not find the app\'s fs and subprocess providers; refusing to register anything under the public names (that fallback clashed with the real providers at a cold start and failed the fiber). Through the route-mode entry the inject gate should make this state unreachable; if you are seeing it, this row was mounted through dsh-ssh/replace or with a patched inject list while the local providers were left in place.')
 	}
@@ -256,7 +259,7 @@ export function applyModule(ctx: Context, config: SshConfig, allowReplace = fals
 	)
 	const subprocess = new SshSubprocessRuntime(
 		ctx,
-		{ mapRipgrep: config.mapRipgrep, remoteRoots },
+		{ mapRipgrep: config.mapRipgrep, remoteRoots, remoteShell: config.remoteShell, terminalMode: config.terminalMode },
 		transport,
 		mode === 'replace' ? 'subprocess' : 'ssh-subprocess',
 	)

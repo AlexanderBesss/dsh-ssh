@@ -70,6 +70,7 @@ package) that mounts the `ssh` row with these values:
 | `sshBin` | `ssh` | ssh client binary |
 | `sshArgs` | `[]` | extra arguments for every ssh invocation |
 | `remoteShell` | `powershell` | shell hosting the remote file agent (`pwsh` for PowerShell 7) |
+| `terminalMode` | `auto` | how a remote terminal runs: `auto` picks `line` for a Windows remote and `pty` where the remote allocates a tty; set `line` or `pty` to force one |
 | `mapRipgrep` | `true` | upload the packaged `rg.exe` to the remote once, so `glob`/`grep` need nothing installed remotely |
 | `connectTimeoutMs` | `20000` | budget for bringing the remote channel up |
 | `requestTimeoutMs` | `30000` | budget for one file operation |
@@ -106,8 +107,8 @@ Good to know:
   remote copy is reused instead.
 - Edits are text-only (binary writes are refused, as locally).
 - `watch` on a remote path fails loudly instead of quietly watching a local
-  mirror; remote terminal sessions are not supported; a remote command can
-  read input present at launch, but not input written later.
+  mirror; for what a remote terminal does and does not do, see
+  [Terminal](#terminal) below.
 - Files read or written through the tools are also copied to the same path on
   this machine, so changed-file cards, per-file diffs, and the native
   “open in app on this PC” buttons show real content. The mirror catches up
@@ -116,3 +117,38 @@ Good to know:
 - Occasionally an `ssh` invocation returns nothing at all; reads absorb that
   with one automatic retry, mutations never auto-retry (their effect may
   already have landed).
+
+## Terminal
+
+Open the terminal tab of a session whose workspace sits on the remote PC and the
+shell that opens runs **there**, not on this machine: the allocation is routed by
+working directory, exactly like every other call. A terminal opened in a local
+folder still gets a local shell.
+
+In the default `line` mode the tab is not one long-lived process — each line you
+press Enter on becomes one `ssh` invocation on the remote machine, so
+
+- what you type echoes as you type it, and a line lands roughly one round trip
+  (0.5–2 s on a LAN) after Enter;
+- `cd` and `$env:VAR = …` carry over: the working directory and environment
+  changes are re-applied to the next command;
+- `Ctrl+C` stops the command that is running, and a line typed while it runs is
+  queued rather than lost;
+- `exit`, `exit 3` and `Ctrl+D` close the tab; a killed or failing invocation
+  prints a note and leaves the prompt usable.
+
+What `line` mode cannot do is anything that needs a real terminal on the far
+side: `vim`, `htop`, password prompts, the cursor placement of full-screen
+programs, and live window resizing. A Windows SSH server never allocates a
+pseudo-terminal, so that is a limit of the remote OS, not of the plugin. Where
+the remote *does* allocate one (an OpenSSH server on Linux or macOS), set
+`terminalMode: pty` and the tab streams a genuine interactive shell instead —
+colours, full-screen programs, `Ctrl+C` delivered as a byte, initial window size
+applied with `stty`. `auto` picks `pty` on a non-Windows remote and `line`
+everywhere else.
+
+Two details worth knowing. The tab's title comes from the shell DSH would have
+used locally, so in route mode with `defaultSide: auto` a remote tab can read
+`bash` while its commands run remotely; `defaultSide: remote` makes the label
+match. And like the non-`host` keys above, `terminalMode` is read at startup, so
+changing it takes effect when the app restarts.
